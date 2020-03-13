@@ -1,9 +1,9 @@
 
+#![allow(dead_code)]
+
 use std::env;
 
 use thiserror::Error;
-
-#[allow(dead_code)]
 
 use tokio::net::TcpStream;
 //use tokio::prelude::*;
