@@ -13,19 +13,19 @@ pub enum Error {
   #[error("env var {0} value could not be parsed")]
   EnvInvalidSyntax(String),
   #[error("socket trouble communicating with pigpiod")]
-  Comms   Socket
+  DaemonComms(tokio::io::Error),
 }
 
 type Result<T> = std::result::Result<T,Error>;
 
 pub struct BoardConnection {
-  conn : tokio::net::TcpStream;
+  conn : tokio::net::TcpStream,
 }
 
-static const PI_ENVPORT : &str = "PIGPIO_PORT";
-static const PI_ENVADDR : &str = "PIGPIO_ADDR";
-static const PI_DEFAULT_SOCKET_PORT : u16 = 8888;
-static const PI_DEFAULT_SOCKET_ADDR : &str = "localhost";
+const PI_ENVPORT : &str = "PIGPIO_PORT";
+const PI_ENVADDR : &str = "PIGPIO_ADDR";
+const PI_DEFAULT_SOCKET_PORT : u16 = 8888;
+const PI_DEFAULT_SOCKET_ADDR : &str = "localhost";
 
 
 fn env_var(varname : &str) -> Result<Option<String>> {
