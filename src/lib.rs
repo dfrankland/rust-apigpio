@@ -95,20 +95,21 @@ impl Connection {
 
   pub async fn cmdr(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<Word> {
     let mut conn = self.conn.lock().await;
-    let mut m = [0u8; 16];
+    let mut cmsg = [0u8; 16];
     {
       let mut i = 0;
       let mut f = |v| {
-        *array_mut_ref![m,i,4] = u32::to_le_bytes(v);
+        *array_mut_ref![cmsg,i,4] = u32::to_le_bytes(v);
         i += 4;
       };
       f(cmd);
       f(p1);
       f(p2);
     }
-    conn.write_all(&m).await?;
-    conn.read_exact(&mut m).await?;
-    let res = i32::from_le_bytes(*array_ref![m,12,4]);
+    conn.write_all(&cmsg).await?;
+    let mut rmsg = [0u8; 16];
+    conn.read_exact(&mut rmsg).await?;
+    let res = i32::from_le_bytes(*array_ref![rmsg,12,4]);
     if res < 0 { return Err(Error::Pi(res)); }
     Ok(res as Word)
   }
