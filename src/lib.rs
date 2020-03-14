@@ -90,6 +90,12 @@ impl fmt::Display for WaveId {
   }
 }
 
+pub struct Pulse {
+  on_mask:  Word,
+  off_mask: Word,
+  us_delay: Word,
+}
+
 use Level::*;
 
 impl TryFrom<usize> for Level {
@@ -159,7 +165,10 @@ impl Connection {
     Connection::new_at(&sockaddr).await
   }
 
-  pub async fn cmdr(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<Word> {
+  pub async fn cmd_extra(&self,
+                         cmd : Word, p1 : Word, p2 : Word, p3 : Word,
+                         extra : &[u8])
+                         -> Result<Word> {
     let mut conn = self.conn.lock().await;
     let mut cmsg = [0u8; 16];
     {
@@ -171,8 +180,10 @@ impl Connection {
       f(cmd);
       f(p1);
       f(p2);
+      f(p3);
     }
     conn.write_all(&cmsg).await?;
+    conn.write_all(extra).await?;
     let mut rmsg = [0u8; 16];
     conn.read_exact(&mut rmsg).await?;
     if rmsg[0..12] != cmsg[0..12] {
@@ -181,6 +192,9 @@ impl Connection {
     let res = i32::from_le_bytes(*array_ref![rmsg,12,4]);
     if res < 0 { return Err(Error::Pi(res)); }
     Ok(res as Word)
+  }
+  pub async fn cmdr(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<Word> {
+    self.cmd_extra(cmd,p1,p2,0,&[0;0]).await
   }
 
   pub async fn cmd0(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<()> {
@@ -220,6 +234,12 @@ impl Connection {
     Ok(WaveId( self.cmdr(PI_CMD_WVNEW, 0,0).await? ))
   }
   pub async fn wave_create(&self) -> Result<WaveId> {
+    // Caller is responsible for not calling wave_* functions for
+    // multiple purposes concurrently - ie, for enforcing the
+    // concurrency control implied by pigpiod's interface.
+    //
+    // Getting this wrong is not a memory safety concern (hence the
+    // lack of unsafe) but would cause wrong behaviours.
     Ok(WaveId( self.cmdr(PI_CMD_WVCRE, 0,0).await? ))
   }
   pub async fn wave_delete(&self, wave : WaveId) -> Result<()> {
@@ -248,6 +268,16 @@ impl Connection {
       1     => Ok(true),
       wrong => Err(ProtocolBadBoolean(wrong)),
     }
+  }
+
+  pub async fn wave_add_generic(&self, pulses : &[Pulse]) -> Result<Word> {
+    let mut extra = Vec::with_capacity(pulses.len() * 12);
+    for ref pulse in pulses {
+      extra.extend( &u32::to_le_bytes( pulse.on_mask  ));
+      extra.extend( &u32::to_le_bytes( pulse.off_mask ));
+      extra.extend( &u32::to_le_bytes( pulse.us_delay ));
+    }
+    self.cmd_extra(PI_CMD_WVAG, 0,0, extra.len() as Word, &extra).await
   }
 
   pub async unsafe fn wave_send_using_mode(&self, wave: WaveId, txmode : Word)
