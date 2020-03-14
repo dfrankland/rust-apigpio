@@ -10,6 +10,8 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::prelude::*;
 
+use std::convert::TryFrom;
+
 use arrayref::*;
 use num_traits::FromPrimitive;
 use num_derive::FromPrimitive;
@@ -29,13 +31,16 @@ pub enum Error {
   EnvInvalidSyntax(String),
   #[error("socket trouble communicating with pigpiod")]
   DaemonComms(#[from] tokio::io::Error),
+  #[error("invalid Level value {0} (should be 0 or 1)")]
+  BadLevel(usize),
   #[error("pigpiod unexpectedly sent positive return value {0}")]
-  BadReturn(Word),
+  ProtocolBadReturn(Word),
   #[error("pigpiod sent unexpected gpio mode {0}")]
-  BadGpioMode(Word),
+  ProtocolBadGpioMode(Word),
   #[error("pigpiod sent reply which did not match our command")]
-  ReplyMismatch(Box<(MessageBuf,MessageBuf)>),
+  ProtocolReplyMismatch(Box<(MessageBuf,MessageBuf)>),
 }
+use Error::*;
 
 pub type Result<T> = std::result::Result<T,Error>;
 
@@ -68,12 +73,21 @@ pub enum Level {
 
 use Level::*;
 
+impl TryFrom<usize> for Level {
+  type Error = Error;
+  fn try_from(u : usize) -> Result<Level> {
+    Ok(match u {
+      0 => L,
+      1 => H,
+      _ => return Err(BadLevel(u)),
+    })
+  }
+}
+
 impl Level {
-  pub fn u(u : usize) -> Level { match u {
-    0 => L,
-    1 => H,
-    _ => panic!("Level::u({})",u)
-  } }
+  pub fn u(u : usize) -> Level {
+    TryFrom::try_from(u).unwrap_or_else(|_| panic!("Level::u({})",u))
+  }
   pub fn b(b : bool) -> Level { Level::u(b as usize) }
 }
 
@@ -134,7 +148,7 @@ impl Connection {
     let mut rmsg = [0u8; 16];
     conn.read_exact(&mut rmsg).await?;
     if rmsg[0..12] != cmsg[0..12] {
-      return Err(Error::ReplyMismatch(Box::new((cmsg,rmsg))))
+      return Err(ProtocolReplyMismatch(Box::new((cmsg,rmsg))))
     }
     let res = i32::from_le_bytes(*array_ref![rmsg,12,4]);
     if res < 0 { return Err(Error::Pi(res)); }
@@ -143,7 +157,7 @@ impl Connection {
 
   pub async fn cmd0(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<()> {
     let res = self.cmdr(cmd,p1,p2).await?;
-    if res > 0 { return Err(Error::BadReturn(res as Word)) }
+    if res > 0 { return Err(ProtocolBadReturn(res as Word)) }
     Ok(())
   }
   
@@ -152,7 +166,7 @@ impl Connection {
   }
   pub async fn get_mode(&self, pin : Word) -> Result<GpioMode> {
     let mode = self.cmdr(PI_CMD_MODEG, pin, 0).await?;
-    <GpioMode>::from_u32(mode).ok_or_else(|| Error::BadGpioMode(mode))
+    <GpioMode>::from_u32(mode).ok_or_else(|| ProtocolBadGpioMode(mode))
   }
   pub async fn set_pull_up_down(&self, pin : Word, pud : PullUpDown)
                                 -> Result<()> {
@@ -163,4 +177,11 @@ impl Connection {
     };
     self.cmd0(PI_CMD_MODES, pin, mode).await
   }
+/*
+  pub int gpio_read(int pi, unsigned gpio)
+   {return pigpio_command(pi, PI_CMD_READ, gpio, 0, 1);}
+
+int gpio_write(int pi, unsigned gpio, unsigned level)
+   {return pigpio_command(pi, PI_CMD_WRITE, gpio, level, 1);}
+*/
 }
