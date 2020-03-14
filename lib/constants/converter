@@ -1,0 +1,54 @@
+#!/usr/bin/perl -w
+
+use strict;
+use autodie;
+
+our $def_s = '';
+our $ec_lookup = <<END;
+pub fn PI_error_code_lookup(val : i32)
+                            -> Option((&'static str, &'static str)) {
+  let r = match val {
+END
+
+while (<>) {
+    if (m{^/\* *DEF_S +(.*?) *\*/\s*$}) {
+	$def_s = $1;
+	next;
+    }
+    if (m{^/\* *DEF_E.*\*/$}) {
+	$def_e = '';
+	next;
+    }
+    next if m{^/\*D\s*$} .. m{^D\*/\s*$};
+
+    if (m{^/\*.*\*/$}) {
+	print;
+	next;
+    }
+
+    next unless m{^\#define\s+([A-Z_]+)\s+(.*?)\s+$};
+    my ($name,$val) = ($1,$2);
+
+    next unless $name =~ m/^PI_/;
+    next if $def_s =~ m/defaults/i;
+
+    my $comment = '';
+    $val =~ s{ (?://|/*).*$}{} and $comment = $&;
+
+    if ($def_s =~ m/error codes/i) {
+	print "pub const $name : i32 = $val;$comment\n";
+	$comment =~ s{^ //} or confess "$_ ?";
+	$comment =~ s{[\\\"]}{\\$&}g;
+	$ec_lookup .= "    $name => (\"$name\", \"$comment\"),\n";
+	next;
+    }
+
+    print "pub const $name : u32 = $val;$comment\n";
+}
+
+$ec_lookup .= <END;
+    _ => { return None },
+  };
+  Some(r)
+}
+END
