@@ -5,4 +5,5 @@ edition = "2018"
 
 [dependencies]
 thiserror = "1"
+arrayref = "0.3"
 tokio = { version = "0.2", features = ["full"] }

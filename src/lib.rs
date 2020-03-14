@@ -9,6 +9,8 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::prelude::*;
 
+use arrayref::*;
+
 #[derive(Error,Debug)]
 pub enum Error {
   #[error("env var {0} contains non-unicode data")]
@@ -88,8 +90,7 @@ impl Connection {
     {
       let mut i = 0;
       let mut f = |v| {
-        let b = u32::to_le_bytes(v);
-        m[i..][0..4].copy_from_slice(&b);
+        *array_mut_ref![m,i,4] = u32::to_le_bytes(v);
         i += 4;
       };
       f(cmd);

@@ -4,6 +4,7 @@
 name = "apigpio"
 version = "0.1.0"
 dependencies = [
+ "arrayref",
  "thiserror",
  "tokio",
 ]
@@ -13,6 +14,12 @@ name = "arc-swap"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7b8a9123b8027467bce0099fe556c628a53c8d83df0507084c31e9ba2e39aff"
+
+[[package]]
+name = "arrayref"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4c527152e37cf757a3f78aae5a06fbeefdb07ccc535c980a3208ee3060dd544"
 
 [[package]]
 name = "bitflags"
