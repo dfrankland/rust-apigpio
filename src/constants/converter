@@ -34,7 +34,7 @@ while (<>) {
 	next;
     }
 
-    next unless m{^\#define\s+([A-Z_]+)\s+(.*?)\s+$};
+    next unless m{^\#define\s+([A-Z0-9_]+)\s+(.*?)\s+$};
     my ($name,$val) = ($1,$2);
 
     next unless $name =~ m/^PI_/;
@@ -46,7 +46,7 @@ while (<>) {
 
     if ($def_s =~ m/error codes/i) {
 	print "pub const $name : i32 = $val;$comment\n";
-	$comment =~ s{^ // *}{} or confess "$_ ?";
+	$comment =~ s{^ // *}{} or $comment eq '' or confess "$_ ?";
 	next if $comment =~ m/DEPRECATED/;
 
 	next if $name eq 'PI_BAD_PRIM_CHANNEL'; # special bodge
