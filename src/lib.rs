@@ -6,6 +6,7 @@ use std::env;
 use thiserror::Error;
 
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 //use tokio::prelude::*;
 
 #[derive(Error,Debug)]
@@ -21,7 +22,7 @@ pub enum Error {
 type Result<T> = std::result::Result<T,Error>;
 
 pub struct Connection {
-  conn : tokio::net::TcpStream,
+  conn : Mutex<TcpStream>,
 }
 
 const PI_ENVPORT : &str = "PIGPIO_PORT";
@@ -58,6 +59,7 @@ impl Connection {
   pub async fn new_at<A : tokio::net::ToSocketAddrs>(addr : &A)
                       -> Result<Connection> {
     let conn = TcpStream::connect(addr).await?;
+    let conn = Mutex::new(conn);
     Ok(Connection { conn })
   }
 
