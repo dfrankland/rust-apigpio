@@ -20,7 +20,7 @@ use num_traits::FromPrimitive;
 use num_derive::FromPrimitive;
 use strum_macros::Display;
 
-use slotmap::{SlotMap};
+use slotmap::{DenseSlotMap};
 
 use std::{result,fmt};
 
@@ -28,7 +28,7 @@ pub type Word = u32;
 
 pub type MessageBuf = [u8;16];
 
-#[derive(Error,Debug,Clone)]
+#[derive(Error,Debug)]
 pub enum Error {
   #[error("pigpiod reported error")]
   Pi(i32),
@@ -182,6 +182,7 @@ impl Connection {
 
 impl Deref for Connection {
   type Target = ConnectionCore;
+  fn deref(&self) -> &Self::Target { &self.conn }
 }
 
 impl ConnectionCore {
@@ -329,12 +330,13 @@ pub struct GpioChange {
   sequence : Word, // increments by 1 each time; allows spotting lost events
 }
 
-struct Subscription {
+pub struct Subscription {
   wreceiver : watch::Receiver<GpioChange>,
-  dsender : oneshot::Sender<()>,
+  _dsender : oneshot::Sender<()>, // exists to signal being dropped
 }
 impl Deref for Subscription {
   type Target = watch::Receiver<GpioChange>;
+  fn deref(&self) -> &Self::Target { &self.wreceiver }
 }
 
 pub struct SubscriptionRecord {
@@ -358,7 +360,7 @@ struct NotificationProcessor {
   add : mpsc::Receiver<SubscriptionRequest>,
   remove_sender : mpsc::Sender<SubscriptionKey>,
   remove_receiver : mpsc::Receiver<SubscriptionKey>,
-  subs : SlotMap<SubscriptionKey, SubscriptionRecord>,
+  subs : DenseSlotMap<SubscriptionKey, SubscriptionRecord>,
 }
 
 impl SubscriptionRecord {
@@ -366,10 +368,12 @@ impl SubscriptionRecord {
     // trickily, this means sequence on our first actual notification is
     // 1, whereas the thing we put into the watch when we create it is 0
     self.sequence += 1;
-    self.sender.broadcast(
-      GpioChange { pin : self.pin, level, tick, sequence : self.sequence }
-    ).ok();
-    self.previously = Some(level);
+    self.client.broadcast(GpioChange {
+        pin : self.pin,
+        level : Some(level), sequence : self.sequence,
+        tick
+    }).ok();
+    self.previously = Some((level as Word) << self.pin);
   }
 }
 
@@ -379,20 +383,22 @@ impl NotificationProcessor {
     let conn = conn.clone();
     let (add_sender, add_receiver) = mpsc::channel(5);
     let (remove_sender, remove_receiver) = mpsc::channel(20);
-    let subs = SlotMap::with_key();
+    let subs = DenseSlotMap::with_key();
     // xxx need socket for notifications!
     // xxx need to request notifications inband
-    let processor = NotificationProcessor {
+    let mut processor = NotificationProcessor {
       add : add_receiver,
       conn, remove_sender, remove_receiver, subs
     };
-    task::spawn(processor.task());
+    task::spawn(async move {
+      processor.task().await.expect("gpio change notification task died");
+    });
     Ok(add_sender)
   }
 
   async fn do_add(&mut self, req : SubscriptionRequest) -> Result<()> {
     let (pin, wsender, dreceiver, expected_spec) = req;
-    let record = SubscriptionRecord {
+    let mut record = SubscriptionRecord {
       client : wsender,
       pin,
       previously : None,
@@ -403,7 +409,7 @@ impl NotificationProcessor {
       if expected != Some(actual) { record.notify(actual, None) }
     };
     let subk = self.subs.insert(record);
-    let tremove = self.remove_sender.clone();
+    let mut tremove = self.remove_sender.clone();
     task::spawn(async move {
       dreceiver.await.unwrap_err();
       tremove.send(subk).await.ok();
@@ -435,7 +441,7 @@ impl NotificationProcessor {
           }
         }*/
         unsubk = self.remove_receiver.recv() => {
-          let unsub = self.subs.remove(unsubk.unwrap()).unwrap();
+          let _unsub = self.subs.remove(unsubk.unwrap()).unwrap();
           // drop unusb
         },
       }
@@ -456,7 +462,6 @@ impl Connection {
     if notify_add.is_none() {
       *notify_add = Some(NotificationProcessor::spawn(&self.conn).await?);
     }
-    let notify_add = notify_add.unwrap();
 
     // xxx do the gpio read here ?
 
@@ -464,9 +469,10 @@ impl Connection {
       pin, level : None, tick : None, sequence : 0,
     });
     let (dsender, dreceiver) = oneshot::channel();
-    notify_add.send(( pin, wsender, dreceiver, expected_spec ))
+    notify_add.as_mut().unwrap()
+      .send(( pin, wsender, dreceiver, expected_spec ))
       .await.expect("notify task died?");
 
-    Ok(Subscription { wreceiver, dsender })
+    Ok(Subscription { wreceiver, _dsender : dsender })
   }
 }
