@@ -17,6 +17,8 @@ use num_traits::FromPrimitive;
 use num_derive::FromPrimitive;
 use strum_macros::Display;
 
+use std::{result,fmt};
+
 pub type Word = u32;
 
 pub type MessageBuf = [u8;16];
@@ -74,6 +76,15 @@ pub enum Level {
 }
 
 pub type Pin = Word;
+
+#[derive(Debug)]
+pub struct WaveId (pub Word);
+
+impl fmt::Display for WaveId {
+  fn fmt(&self, fmt : &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
+    write!(fmt, "WaveId{}", self.0)
+  }
+}
 
 use Level::*;
 
