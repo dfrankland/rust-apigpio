@@ -19,7 +19,7 @@ pub enum Error {
   DaemonComms(#[from] tokio::io::Error),
 }
 
-type Result<T> = std::result::Result<T,Error>;
+pub type Result<T> = std::result::Result<T,Error>;
 
 pub struct Connection {
   conn : Mutex<TcpStream>,
@@ -30,6 +30,19 @@ const PI_ENVADDR : &str = "PIGPIO_ADDR";
 const PI_DEFAULT_SOCKET_PORT : u16 = 8888;
 const PI_DEFAULT_SOCKET_ADDR : &str = "localhost";
 
+pub type Word = u32;
+
+#[derive(Debug)]
+pub enum GpioMode {
+  Input  = 0,
+  Output = 1,
+  Alt0   = 4,
+  Alt1   = 5,
+  Alt2   = 6,
+  Alt3   = 7,
+  Alt4   = 3,
+  Alt5   = 2,
+}
 
 fn env_var(varname : &str) -> Result<Option<String>> {
   use std::env::VarError::*;
@@ -67,5 +80,27 @@ impl Connection {
     let addr = default_addr()?;
     let sockaddr = (addr.as_ref(), default_port()?);
     Connection::new_at(&sockaddr).await
+  }
+
+  pub async fn cmd0(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<()> {
+    let conn = self.conn.lock().await;
+    let mut m = [0u8; 16];
+    {
+      let mut i = 0;
+      let mut f = |v| {
+        let b = u32::to_le_bytes(v);
+        m[i..][0..4].copy_from_slice(&b);
+        i += 4;
+      };
+      f(cmd);
+      f(p1);
+      f(p2);
+      Ok(())
+    }
+  }
+  
+  pub async fn set_mode(&self, pin : Word, mode : GpioMode) -> Result<()> {
+    const PI_CMD_MODES : Word = 0;
+    self.cmd0(PI_CMD_MODES, pin, mode as Word).await
   }
 }
