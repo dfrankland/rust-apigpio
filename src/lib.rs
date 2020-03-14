@@ -60,6 +60,25 @@ pub enum GpioMode {
   Alt5   = PI_ALT5 as isize,
 }
 
+#[derive(Debug,Display)]
+pub enum Level {
+  L = 0,
+  H = 1,
+}
+
+use Level::*;
+
+impl Level {
+  pub fn u(u : usize) -> Level { match u {
+    0 => L,
+    1 => H,
+    _ => panic!("Level::u({})",u)
+  } }
+  pub fn b(b : bool) -> Level { Level::u(b as usize) }
+}
+
+pub type PullUpDown = Option<Level>;
+
 fn env_var(varname : &str) -> Result<Option<String>> {
   use std::env::VarError::*;
   match env::var(varname) {
@@ -134,5 +153,14 @@ impl Connection {
   pub async fn get_mode(&self, pin : Word) -> Result<GpioMode> {
     let mode = self.cmdr(PI_CMD_MODEG, pin, 0).await?;
     <GpioMode>::from_u32(mode).ok_or_else(|| Error::BadGpioMode(mode))
+  }
+  pub async fn set_pull_up_down(&self, pin : Word, pud : PullUpDown)
+                                -> Result<()> {
+    let mode = match pud {
+      None    => PI_PUD_OFF,
+      Some(L) => PI_PUD_DOWN,
+      Some(H) => PI_PUD_UP,
+    };
+    self.cmd0(PI_CMD_MODES, pin, mode).await
   }
 }
