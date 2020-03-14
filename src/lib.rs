@@ -16,6 +16,8 @@ use strum_macros::Display;
 
 pub type Word = u32;
 
+pub type MessageBuf = [u8;16];
+
 #[derive(Error,Debug)]
 pub enum Error {
   #[error("pigpiod reported error")]
@@ -31,7 +33,7 @@ pub enum Error {
   #[error("pigpiod sent unexpected gpio mode {0}")]
   BadGpioMode(Word),
   #[error("pigpiod sent reply which did not match our command")]
-  ReplyMismatch(Box<([u8;16],[u8;16])>),
+  ReplyMismatch(Box<(MessageBuf,MessageBuf)>),
 }
 
 pub type Result<T> = std::result::Result<T,Error>;
