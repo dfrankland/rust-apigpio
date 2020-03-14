@@ -50,14 +50,14 @@ const PI_DEFAULT_SOCKET_ADDR : &str = "localhost";
 
 #[derive(Debug,FromPrimitive,Display)]
 pub enum GpioMode {
-  Input  = 0,
-  Output = 1,
-  Alt0   = 4,
-  Alt1   = 5,
-  Alt2   = 6,
-  Alt3   = 7,
-  Alt4   = 3,
-  Alt5   = 2,
+  Input  = PI_INPUT  as isize,
+  Output = PI_OUTPUT as isize,
+  Alt0   = PI_ALT0 as isize,
+  Alt1   = PI_ALT1 as isize,
+  Alt2   = PI_ALT2 as isize,
+  Alt3   = PI_ALT3 as isize,
+  Alt4   = PI_ALT4 as isize,
+  Alt5   = PI_ALT5 as isize,
 }
 
 fn env_var(varname : &str) -> Result<Option<String>> {
