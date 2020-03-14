@@ -11,14 +11,20 @@ use tokio::prelude::*;
 
 use arrayref::*;
 
+pub type Word = u32;
+
 #[derive(Error,Debug)]
 pub enum Error {
+  #[error("pigpio reported error")]
+  Pi(i32),
   #[error("env var {0} contains non-unicode data")]
   EnvNotUnicode(String),
   #[error("env var {0} value could not be parsed")]
   EnvInvalidSyntax(String),
   #[error("socket trouble communicating with pigpiod")]
   DaemonComms(#[from] tokio::io::Error),
+  #[error("pigpiod sent unexpected non=error return value")]
+  ProtocolReturn(Word),
 }
 
 pub type Result<T> = std::result::Result<T,Error>;
@@ -31,8 +37,6 @@ const PI_ENVPORT : &str = "PIGPIO_PORT";
 const PI_ENVADDR : &str = "PIGPIO_ADDR";
 const PI_DEFAULT_SOCKET_PORT : u16 = 8888;
 const PI_DEFAULT_SOCKET_ADDR : &str = "localhost";
-
-pub type Word = u32;
 
 #[derive(Debug)]
 pub enum GpioMode {
@@ -84,7 +88,7 @@ impl Connection {
     Connection::new_at(&sockaddr).await
   }
 
-  pub async fn cmd0(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<()> {
+  pub async fn cmdr(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<Word> {
     let mut conn = self.conn.lock().await;
     let mut m = [0u8; 16];
     {
@@ -99,11 +103,22 @@ impl Connection {
     }
     conn.write_all(&m).await?;
     conn.read_exact(&mut m).await?;
+    let res = i32::from_le_bytes(*array_ref![m,12,4]);
+    if res < 0 { return Err(Error::Pi(res)); }
+    Ok(res as Word)
+  }
+
+  pub async fn cmd0(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<()> {
+    let res = self.cmdr(cmd,p1,p2).await?;
+    if res > 0 { return Err(Error::ProtocolReturn(res as Word)) }
     Ok(())
   }
   
   pub async fn set_mode(&self, pin : Word, mode : GpioMode) -> Result<()> {
-    const PI_CMD_MODES : Word = 0;
-    self.cmd0(PI_CMD_MODES, pin, mode as Word).await
+    self.cmd0(0, pin, mode as Word).await
+  }
+  pub async fn get_mode(&self, pin : Word) -> Result<GpioMode> {
+    let mval = self.cmdr(1, pin, 0).await?;
+    panic!();
   }
 }
