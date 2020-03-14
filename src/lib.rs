@@ -129,10 +129,10 @@ impl Connection {
   }
   
   pub async fn set_mode(&self, pin : Word, mode : GpioMode) -> Result<()> {
-    self.cmd0(0, pin, mode as Word).await
+    self.cmd0(PI_CMD_MODES, pin, mode as Word).await
   }
   pub async fn get_mode(&self, pin : Word) -> Result<GpioMode> {
-    let mode = self.cmdr(1, pin, 0).await?;
+    let mode = self.cmdr(PI_CMD_MODEG, pin, 0).await?;
     <GpioMode>::from_u32(mode).ok_or_else(|| Error::BadGpioMode(mode))
   }
 }
