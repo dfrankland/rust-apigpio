@@ -55,7 +55,7 @@ fn default_addr() -> Result<String> {
 }
 
 impl Connection {
-  pub async fn new_at(addr : &std::net::SocketAddr)
+  pub async fn new_at<A : tokio::net::ToSocketAddrs>(addr : &A)
                       -> Result<Connection> {
     let conn = TcpStream::connect(addr).await?;
     Ok(Connection { conn })
@@ -64,7 +64,6 @@ impl Connection {
   pub async fn new() -> Result<Connection> {
     let addr = default_addr()?;
     let sockaddr = (addr.as_ref(), default_port()?);
-    let conn = TcpStream::connect(sockaddr).await?;
-    Ok(Connection { conn })
+    Connection::new_at(&sockaddr).await
   }
 }
