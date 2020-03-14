@@ -242,7 +242,9 @@ impl Connection {
     // lack of unsafe) but would cause wrong behaviours.
     Ok(WaveId( self.cmdr(PI_CMD_WVCRE, 0,0).await? ))
   }
-  pub async fn wave_delete(&self, wave : WaveId) -> Result<()> {
+  pub async unsafe fn wave_delete(&self, wave : WaveId) -> Result<()> {
+    // This is safe if no-one in the whole system ever calls
+    // wave_send_using_mode with mode *SYNC*.
     self.cmd0(PI_CMD_WVDEL, wave.0, 0).await
   }
 
