@@ -6,8 +6,9 @@ use Carp;
 
 our $def_s = '';
 our $ec_lookup = <<END;
+#[allow(non_snake_case)]
 pub fn PI_error_code_lookup(val : i32)
-                            -> Option((&'static str, &'static str)) {
+                            -> Option<(&'static str, &'static str)> {
   let r = match val {
 END
 
@@ -37,11 +38,15 @@ while (<>) {
     next if $val =~ m/\"/;
 
     my $comment = '';
-    $val =~ s{ (?://|/*).*$}{} and $comment = $&;
+    $val =~ s{ (?://|/\*).*$}{} and $comment = $&;
 
     if ($def_s =~ m/error codes/i) {
 	print "pub const $name : i32 = $val;$comment\n";
 	$comment =~ s{^ // *}{} or confess "$_ ?";
+	next if $comment =~ m/DEPRECATED/;
+
+	next if $name eq 'PI_BAD_PRIM_CHANNEL'; # special bodge
+
 	$comment =~ s{[\\\"]}{\\$&}g;
 	$ec_lookup .= "    $name => (\"$name\", \"$comment\"),\n";
 	next;
