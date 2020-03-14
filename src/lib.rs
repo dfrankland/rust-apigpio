@@ -30,6 +30,8 @@ pub enum Error {
   BadReturn(Word),
   #[error("pigpiod sent unexpected gpio mode {0}")]
   BadGpioMode(Word),
+  #[error("pigpiod sent reply which did not match our command")]
+  ReplyMismatch(Box<([u8;16],[u8;16])>),
 }
 
 pub type Result<T> = std::result::Result<T,Error>;
@@ -109,6 +111,9 @@ impl Connection {
     conn.write_all(&cmsg).await?;
     let mut rmsg = [0u8; 16];
     conn.read_exact(&mut rmsg).await?;
+    if rmsg[0..12] != cmsg[0..12] {
+      return Err(Error::ReplyMismatch(Box::new((cmsg,rmsg))))
+    }
     let res = i32::from_le_bytes(*array_ref![rmsg,12,4]);
     if res < 0 { return Err(Error::Pi(res)); }
     Ok(res as Word)
