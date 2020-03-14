@@ -88,8 +88,12 @@ struct NotificationProcessor {
 }
 
 pub struct Connection {
-  conn : Arc<Mutex<TcpStream>>,
+  conn : Arc<ConnectionCore>,
   notify : Mutex<Option<mpsc::Sender<SubscriptionRequest>>>,
+}
+
+pub struct ConnectionCore {
+  conn : Mutex<TcpStream>,
 }
 
 const PI_ENVPORT : &str = "PIGPIO_PORT";
@@ -187,12 +191,32 @@ fn default_addr() -> Result<String> {
   Ok(spec.unwrap().to_owned())
 }
 
-async fn cmd_extra(conn : &Arc<Mutex<TcpStream>,
+impl Connection {
+  pub async fn new_at<A : tokio::net::ToSocketAddrs>(addr : &A)
+                      -> Result<Connection> {
+    let conn = TcpStream::connect(addr).await?;
+    let conn = Mutex::new(conn);
+    Ok(Connection { Arc::new(conn), Mutex::new(None) })
+  }
+
+  pub async fn new() -> Result<Connection> {
+    let addr = default_addr()?;
+    let sockaddr = (addr.as_ref(), default_port()?);
+    Connection::new_at(&sockaddr).await
+  }
+}
+
+impl Deref for Connection {
+  type Item = ConnectionCore;
+}
+
+impl ConnectionCore {
+  async fn cmd_raw(&self,
                    cmd : Word, p1 : Word, p2 : Word, p3 : Word,
                    extra : &[u8])
                    -> Result<Word> {
-  let mut conn = conn.lock().await;
-  let mut cmsg = [0u8; 16];
+    let mut conn = self.conn.lock().await;
+    let mut cmsg = [0u8; 16];
     {
       let mut i = 0;
       let mut f = |v| {
@@ -214,20 +238,6 @@ async fn cmd_extra(conn : &Arc<Mutex<TcpStream>,
     let res = i32::from_le_bytes(*array_ref![rmsg,12,4]);
     if res < 0 { return Err(Error::Pi(res)); }
     Ok(res as Word)
-  }
-
-impl Connection {
-  pub async fn new_at<A : tokio::net::ToSocketAddrs>(addr : &A)
-                      -> Result<Connection> {
-    let conn = TcpStream::connect(addr).await?;
-    let conn = Mutex::new(conn);
-    Ok(Connection { conn })
-  }
-
-  pub async fn new() -> Result<Connection> {
-    let addr = default_addr()?;
-    let sockaddr = (addr.as_ref(), default_port()?);
-    Connection::new_at(&sockaddr).await
   }
 
   pub async fn cmdr(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<Word> {
@@ -335,12 +345,13 @@ impl Connection {
   }
 }
 
-async fn notify_task(&mut n : NotificationProcessor) {
+impl NotificationProcessor {
+  async fn task(&mut self) {
     loop {
       tokio::select! {
-        (pin, wsender, dreceiver, expected_spec) = n.add.recv() => {
+        (pin, wsender, dreceiver, expected_spec) = self.add.recv() => {
           let previously = if let Some(expected) = expected_spec {
-            let actual = cmdr_extra(&n.conn, PI_CMD_READ, pin, 0).await?;
+            let actual = cmdr_extra(&self.conn, PI_CMD_READ, pin, 0).await?;
             let actual = <Level>::try_from(actual)?;
             let sequence = 0;
             if expected != Some(actual) {
@@ -358,7 +369,7 @@ async fn notify_task(&mut n : NotificationProcessor) {
             previously : (previously as Word) << pin,
             sequence,
           };
-          let subk = n.subs.insert(record);
+          let subk = self.subs.insert(record);
           let tremove = remove.clone();
           task::spawn(async move {
             dreceiver.await.unwrap_err();
@@ -368,7 +379,7 @@ async fn notify_task(&mut n : NotificationProcessor) {
 
         () = thing.read => {
           let (seqno, tick, flags, levels) = thing;
-          for ref mut record in n.subs {
+          for ref mut record in self.subs {
             let mask = 1u32 << record.pin;
             let thisbit = levels & mask;
             if record.previously != Some(thisbit) {
@@ -381,13 +392,16 @@ async fn notify_task(&mut n : NotificationProcessor) {
             }
           }
         }
-        unsubk = n.remove.recv() => {
-          let unsub = n.remove(unsubk).unwrap();
+        unsubk = self.remove.recv() => {
+          let unsub = self.remove(unsubk).unwrap();
           // drop unusb
         },
       }
     }
   }
+}
+
+                   
 
   pub async fn notify_subscribe(&self, pin : Pin,
                                 expected_spec : Option<Option<Level>>)
