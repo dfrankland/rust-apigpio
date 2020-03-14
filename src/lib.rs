@@ -10,12 +10,15 @@ use tokio::sync::Mutex;
 use tokio::prelude::*;
 
 use arrayref::*;
+use num_traits::FromPrimitive;
+use num_derive::FromPrimitive;
+use strum_macros::Display;
 
 pub type Word = u32;
 
 #[derive(Error,Debug)]
 pub enum Error {
-  #[error("pigpio reported error")]
+  #[error("pigpiod reported error")]
   Pi(i32),
   #[error("env var {0} contains non-unicode data")]
   EnvNotUnicode(String),
@@ -23,8 +26,10 @@ pub enum Error {
   EnvInvalidSyntax(String),
   #[error("socket trouble communicating with pigpiod")]
   DaemonComms(#[from] tokio::io::Error),
-  #[error("pigpiod sent unexpected non=error return value")]
-  ProtocolReturn(Word),
+  #[error("pigpiod unexpectedly sent positive return value {0}")]
+  BadReturn(Word),
+  #[error("pigpiod sent unexpected gpio mode {0}")]
+  BadGpioMode(Word),
 }
 
 pub type Result<T> = std::result::Result<T,Error>;
@@ -38,7 +43,7 @@ const PI_ENVADDR : &str = "PIGPIO_ADDR";
 const PI_DEFAULT_SOCKET_PORT : u16 = 8888;
 const PI_DEFAULT_SOCKET_ADDR : &str = "localhost";
 
-#[derive(Debug)]
+#[derive(Debug,FromPrimitive,Display)]
 pub enum GpioMode {
   Input  = 0,
   Output = 1,
@@ -110,7 +115,7 @@ impl Connection {
 
   pub async fn cmd0(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<()> {
     let res = self.cmdr(cmd,p1,p2).await?;
-    if res > 0 { return Err(Error::ProtocolReturn(res as Word)) }
+    if res > 0 { return Err(Error::BadReturn(res as Word)) }
     Ok(())
   }
   
@@ -118,7 +123,7 @@ impl Connection {
     self.cmd0(0, pin, mode as Word).await
   }
   pub async fn get_mode(&self, pin : Word) -> Result<GpioMode> {
-    let mval = self.cmdr(1, pin, 0).await?;
-    panic!();
+    let mode = self.cmdr(1, pin, 0).await?;
+    <GpioMode>::from_u32(mode).ok_or_else(|| Error::BadGpioMode(mode))
   }
 }
