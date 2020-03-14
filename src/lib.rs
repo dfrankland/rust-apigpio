@@ -7,15 +7,20 @@ use std::env;
 use thiserror::Error;
 
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex,mpsc,oneshot,watch};
+use tokio::task;
 use tokio::prelude::*;
 
 use std::convert::TryFrom;
+use std::ops::Deref;
+use std::sync::Arc;
 
 use arrayref::*;
 use num_traits::FromPrimitive;
 use num_derive::FromPrimitive;
 use strum_macros::Display;
+
+use slotmap::{SlotMap};
 
 use std::{result,fmt};
 
@@ -163,7 +168,9 @@ impl Connection {
                       -> Result<Connection> {
     let conn = TcpStream::connect(addr).await?;
     let conn = Mutex::new(conn);
-    Ok(Connection { Arc::new(conn), Mutex::new(None) })
+    let conn = ConnectionCore { conn };
+    let conn = Arc::new(conn);
+    Ok(Connection { conn, notify_add : Mutex::new(None) })
   }
 
   pub async fn new() -> Result<Connection> {
@@ -174,7 +181,7 @@ impl Connection {
 }
 
 impl Deref for Connection {
-  type Item = ConnectionCore;
+  type Target = ConnectionCore;
 }
 
 impl ConnectionCore {
@@ -208,7 +215,7 @@ impl ConnectionCore {
   }
 
   pub async fn cmdr(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<Word> {
-    self.cmd_extra(cmd,p1,p2,0,&[0;0]).await
+    self.cmd_raw(cmd,p1,p2,0,&[0;0]).await
   }
 
   pub async fn cmd0(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<()> {
@@ -293,7 +300,7 @@ impl ConnectionCore {
       extra.extend( &u32::to_le_bytes( pulse.off_mask ));
       extra.extend( &u32::to_le_bytes( pulse.us_delay ));
     }
-    self.cmd_extra(PI_CMD_WVAG, 0,0, extra.len() as Word, &extra).await
+    self.cmd_raw(PI_CMD_WVAG, 0,0, extra.len() as Word, &extra).await
   }
 
   pub async unsafe fn wave_send_using_mode(&self, wave: WaveId, txmode : Word)
@@ -319,26 +326,30 @@ pub struct GpioChange {
   level : Level,
   tick : Option<Tick>, // None for the initial notification
   sequence : Word, // increments by 1 each time; allows spotting lost events
-};
+}
 
 struct Subscription {
   wreceiver : watch::Receiver<GpioChange>,
   dsender : oneshot::Sender<()>,
 }
 impl Deref for Subscription {
-  type Item = watch::Receiver<GpioChange>;
+  type Target = watch::Receiver<GpioChange>;
 }
 
 pub struct SubscriptionRecord {
-  client : broadcast::channel::Sender<>,
+  client : mpsc::Sender<GpioChange>,
   pin : Pin,
   previously : Option<Word>,
 }
 
-slotmap::new_key_type! { struct SubscriptionKey; };
+slotmap::new_key_type! { struct SubscriptionKey; }
 
-type SubscriptionRequest =
-  (Pin, broadcast::Sender, oneshot::Receiver, Option<Option<Level>>);
+type SubscriptionRequest = (
+  Pin,
+  mpsc::Sender<GpioChange>,
+  oneshot::Receiver<()>,
+  Option<Option<Level>>
+);
 
 struct NotificationProcessor {
   conn : Arc<Mutex<TcpStream>>,
@@ -369,10 +380,11 @@ impl NotificationProcessor {
     loop {
       tokio::select! {
         (pin, wsender, dreceiver, expected_spec) = self.add.recv() => {
+          let sequence = 0;
           let previously = if let Some(expected) = expected_spec {
-            let actual = cmdr_extra(&self.conn, PI_CMD_READ, pin, 0).await?;
+            let actual = self.conn.cmd_raw(&self.conn, PI_CMD_READ, pin, 0)
+              .await?;
             let actual = <Level>::try_from(actual)?;
-            let sequence = 0;
             if expected != Some(actual) {
               wsender.broadcast(
                 GpioChange { pin, level : actual, tick : None, sequence }
@@ -389,13 +401,13 @@ impl NotificationProcessor {
             sequence,
           };
           let subk = self.subs.insert(record);
-          let tremove = remove.clone();
+          let tremove = self.remove_sender.clone();
           task::spawn(async move {
             dreceiver.await.unwrap_err();
             tremove.send(subk).await.ok();
           });
         },
-
+/* xxx
         () = thing.read => {
           let (seqno, tick, flags, levels) = thing;
           for ref mut record in self.subs {
@@ -410,7 +422,7 @@ impl NotificationProcessor {
               record.previously = Some(thisbit);
             }
           }
-        }
+        }*/
         unsubk = self.remove.recv() => {
           let unsub = self.remove(unsubk).unwrap();
           // drop unusb
@@ -436,7 +448,7 @@ impl Connection {
 
     let (wsender, wreceiver) = watch::channel();
     let (dsender, dreceiver) = oneshot::channel();
-    notify.send(( pin, wsender, dreceiver, expected_spec ))
+    notify_add.send(( pin, wsender, dreceiver, expected_spec ))
       .await.expect("notify task died?");
 
     Ok(Subscription { wreceiver, dsender })
