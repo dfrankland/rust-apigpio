@@ -28,7 +28,7 @@ pub type Word = u32;
 
 pub type MessageBuf = [u8;16];
 
-#[derive(Error,Debug)]
+#[derive(Error,Debug,Clone)]
 pub enum Error {
   #[error("pigpiod reported error")]
   Pi(i32),
@@ -73,7 +73,7 @@ const PI_ENVADDR : &str = "PIGPIO_ADDR";
 const PI_DEFAULT_SOCKET_PORT : u16 = 8888;
 const PI_DEFAULT_SOCKET_ADDR : &str = "localhost";
 
-#[derive(Debug,FromPrimitive,Display)]
+#[derive(Debug,FromPrimitive,Display,PartialEq,Eq,Copy,Clone)]
 pub enum GpioMode {
   Input  = PI_INPUT  as isize,
   Output = PI_OUTPUT as isize,
@@ -85,7 +85,7 @@ pub enum GpioMode {
   Alt5   = PI_ALT5 as isize,
 }
 
-#[derive(Debug,Display)]
+#[derive(Debug,Display,PartialEq,Eq,Copy,Clone)]
 pub enum Level {
   L = 0,
   H = 1,
@@ -93,7 +93,7 @@ pub enum Level {
 
 pub type Pin = Word;
 
-#[derive(Debug)]
+#[derive(Debug,PartialEq,Eq,Copy,Clone)]
 pub struct WaveId (pub Word);
 
 impl fmt::Display for WaveId {
@@ -321,9 +321,10 @@ impl ConnectionCore {
 
 /* ----- notifications ----- */
 
+#[derive(Debug,PartialEq,Eq,Copy,Clone)]
 pub struct GpioChange {
   pin : Pin,
-  level : Level,
+  level : Option<Level>,
   tick : Option<Tick>, // None for the initial notification
   sequence : Word, // increments by 1 each time; allows spotting lost events
 }
@@ -336,9 +337,8 @@ impl Deref for Subscription {
   type Target = watch::Receiver<GpioChange>;
 }
 
-#[derive(Copy)]
 pub struct SubscriptionRecord {
-  client : mpsc::Sender<GpioChange>,
+  client : watch::Sender<GpioChange>,
   pin : Pin,
   previously : Option<Word>, // None means sender not ever notified yet
   sequence : Word,
@@ -348,7 +348,7 @@ slotmap::new_key_type! { struct SubscriptionKey; }
 
 type SubscriptionRequest = (
   Pin,
-  mpsc::Sender<GpioChange>,
+  watch::Sender<GpioChange>,
   oneshot::Receiver<()>,
   Option<Option<Level>>
 );
@@ -359,6 +359,18 @@ struct NotificationProcessor {
   remove_sender : mpsc::Sender<SubscriptionKey>,
   remove_receiver : mpsc::Receiver<SubscriptionKey>,
   subs : SlotMap<SubscriptionKey, SubscriptionRecord>,
+}
+
+impl SubscriptionRecord {
+  fn notify(&mut self, level : Level, tick : Option<Tick>) {
+    // trickily, this means sequence on our first actual notification is
+    // 1, whereas the thing we put into the watch when we create it is 0
+    self.sequence += 1;
+    self.sender.broadcast(
+      GpioChange { pin : self.pin, level, tick, sequence : self.sequence }
+    ).ok();
+    self.previously = Some(level);
+  }
 }
 
 impl NotificationProcessor {
@@ -378,27 +390,17 @@ impl NotificationProcessor {
     Ok(add_sender)
   }
 
-  async fn do_add(&mut self, req : SubscriptionRequest) {
+  async fn do_add(&mut self, req : SubscriptionRequest) -> Result<()> {
     let (pin, wsender, dreceiver, expected_spec) = req;
-    let sequence = 0;
-    let previously = if let Some(expected) = expected_spec {
-      let actual = self.conn.cmd_raw(&self.conn, PI_CMD_READ, pin, 0)
-        .await?;
-      let actual = <Level>::try_from(actual)?;
-      if expected != Some(actual) {
-        wsender.broadcast(
-          GpioChange { pin, level : actual, tick : None, sequence }
-        ).ok();
-      }
-      Some(actual)
-    } else {
-      None
-    };
     let record = SubscriptionRecord {
       client : wsender,
       pin,
-      previously : (previously as Word) << pin,
-      sequence,
+      previously : None,
+      sequence : 0,
+    };
+    if let Some(expected) = expected_spec {
+      let actual = self.conn.gpio_read(pin).await?;
+      if expected != Some(actual) { record.notify(actual, None) }
     };
     let subk = self.subs.insert(record);
     let tremove = self.remove_sender.clone();
@@ -406,13 +408,16 @@ impl NotificationProcessor {
       dreceiver.await.unwrap_err();
       tremove.send(subk).await.ok();
     });
+    Ok(())
   }
 
-  async fn task(&mut self) {
+  async fn task(&mut self) -> Result<()> {
     loop {
       tokio::select! {
         adding = self.add.recv() => match adding {
-          Some(req) => self.do_add()?;
+          Some(req) => self.do_add(req).await?,
+          None => return Ok(()),
+        },
 /* xxx
         () = thing.read => {
           let (seqno, tick, flags, levels) = thing;
@@ -430,7 +435,7 @@ impl NotificationProcessor {
           }
         }*/
         unsubk = self.remove_receiver.recv() => {
-          let unsub = self.remove(unsubk).unwrap();
+          let unsub = self.subs.remove(unsubk.unwrap()).unwrap();
           // drop unusb
         },
       }
@@ -447,12 +452,17 @@ impl Connection {
     // and sends a notification with no Tick if expected_spec is not
     // Some(Some(the current level)).
 
-    let mut notify_add = self.notify_add.lock();
+    let mut notify_add = self.notify_add.lock().await;
     if notify_add.is_none() {
-      *notify_add = Some(NotificationProcessor::spawn().await?);
+      *notify_add = Some(NotificationProcessor::spawn(&self.conn).await?);
     }
+    let notify_add = notify_add.unwrap();
 
-    let (wsender, wreceiver) = watch::channel();
+    // xxx do the gpio read here ?
+
+    let (wsender, wreceiver) = watch::channel(GpioChange {
+      pin, level : None, tick : None, sequence : 0,
+    });
     let (dsender, dreceiver) = oneshot::channel();
     notify_add.send(( pin, wsender, dreceiver, expected_spec ))
       .await.expect("notify task died?");
