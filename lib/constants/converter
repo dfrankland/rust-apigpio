@@ -2,6 +2,7 @@
 
 use strict;
 use autodie;
+use Carp;
 
 our $def_s = '';
 our $ec_lookup = <<END;
@@ -13,15 +14,17 @@ END
 while (<>) {
     if (m{^/\* *DEF_S +(.*?) *\*/\s*$}) {
 	$def_s = $1;
+	print;
 	next;
     }
     if (m{^/\* *DEF_E.*\*/$}) {
-	$def_e = '';
+	$def_s = '';
+	print;
 	next;
     }
     next if m{^/\*D\s*$} .. m{^D\*/\s*$};
 
-    if (m{^/\*.*\*/$}) {
+    if (m{^/\* .* \*/$}) {
 	print;
 	next;
     }
@@ -31,13 +34,14 @@ while (<>) {
 
     next unless $name =~ m/^PI_/;
     next if $def_s =~ m/defaults/i;
+    next if $val =~ m/\"/;
 
     my $comment = '';
     $val =~ s{ (?://|/*).*$}{} and $comment = $&;
 
     if ($def_s =~ m/error codes/i) {
 	print "pub const $name : i32 = $val;$comment\n";
-	$comment =~ s{^ //} or confess "$_ ?";
+	$comment =~ s{^ // *}{} or confess "$_ ?";
 	$comment =~ s{[\\\"]}{\\$&}g;
 	$ec_lookup .= "    $name => (\"$name\", \"$comment\"),\n";
 	next;
@@ -46,9 +50,11 @@ while (<>) {
     print "pub const $name : u32 = $val;$comment\n";
 }
 
-$ec_lookup .= <END;
+$ec_lookup .= <<END;
     _ => { return None },
   };
   Some(r)
 }
 END
+
+print $ec_lookup;
