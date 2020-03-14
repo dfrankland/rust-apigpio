@@ -97,6 +97,7 @@ impl Connection {
       f(p2);
     }
     conn.write_all(&m).await?;
+    conn.read_exact(&mut m).await?;
     Ok(())
   }
   
