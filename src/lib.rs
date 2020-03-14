@@ -20,7 +20,7 @@ pub enum Error {
 
 type Result<T> = std::result::Result<T,Error>;
 
-pub struct BoardConnection {
+pub struct Connection {
   conn : tokio::net::TcpStream,
 }
 
@@ -54,17 +54,17 @@ fn default_addr() -> Result<String> {
   Ok(spec.unwrap().to_owned())
 }
 
-impl BoardConnection {
+impl Connection {
   pub async fn new_at(addr : &std::net::SocketAddr)
-                      -> Result<BoardConnection> {
+                      -> Result<Connection> {
     let conn = TcpStream::connect(addr).await?;
-    Ok(BoardConnection { conn })
+    Ok(Connection { conn })
   }
 
-  pub async fn new() -> Result<BoardConnection> {
+  pub async fn new() -> Result<Connection> {
     let addr = default_addr()?;
     let sockaddr = (addr.as_ref(), default_port()?);
     let conn = TcpStream::connect(sockaddr).await?;
-    Ok(BoardConnection { conn })
+    Ok(Connection { conn })
   }
 }
