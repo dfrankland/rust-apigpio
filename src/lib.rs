@@ -54,42 +54,9 @@ pub type Result<T> = std::result::Result<T,Error>;
 
 type Tick = Word;
 
-pub struct GpioChange {
-  pin : Pin,
-  level : Level,
-  tick : Option<Tick>, // None for the initial notification
-  sequence : Word, // increments by 1 each time; allows spotting lost events
-};
-
-struct Subscription {
-  wreceiver : watch::Receiver<GpioChange>,
-  dsender : oneshot::Sender<()>,
-}
-impl Deref for Subscription {
-  type Item = watch::Receiver<GpioChange>;
-}
-
-pub struct SubscriptionRecord {
-  client : broadcast::channel::Sender<>,
-  pin : Pin,
-  previously : Option<Word>,
-}
-
-slotmap::new_key_type! { struct SubscriptionKey; };
-
-type SubscriptionRequest =
-  (Pin, broadcast::Sender, oneshot::Receiver, Option<Option<Level>>);
-
-struct NotificationProcessor {
-  conn : Arc<Mutex<TcpStream>>,
-  add : mpsc::Receiver<SubscriptionRequest>,
-  remove : mpsc::Receiver<SubscriptionKey>,
-  subs : SlotMap<SubscriptionKey, Subscription>,
-}
-
 pub struct Connection {
   conn : Arc<ConnectionCore>,
-  notify : Mutex<Option<mpsc::Sender<SubscriptionRequest>>>,
+  notify_add : Mutex<Option<mpsc::Sender<SubscriptionRequest>>>,
 }
 
 pub struct ConnectionCore {
@@ -345,7 +312,59 @@ impl ConnectionCore {
   }
 }
 
+/* ----- notifications ----- */
+
+pub struct GpioChange {
+  pin : Pin,
+  level : Level,
+  tick : Option<Tick>, // None for the initial notification
+  sequence : Word, // increments by 1 each time; allows spotting lost events
+};
+
+struct Subscription {
+  wreceiver : watch::Receiver<GpioChange>,
+  dsender : oneshot::Sender<()>,
+}
+impl Deref for Subscription {
+  type Item = watch::Receiver<GpioChange>;
+}
+
+pub struct SubscriptionRecord {
+  client : broadcast::channel::Sender<>,
+  pin : Pin,
+  previously : Option<Word>,
+}
+
+slotmap::new_key_type! { struct SubscriptionKey; };
+
+type SubscriptionRequest =
+  (Pin, broadcast::Sender, oneshot::Receiver, Option<Option<Level>>);
+
+struct NotificationProcessor {
+  conn : Arc<Mutex<TcpStream>>,
+  add : mpsc::Receiver<SubscriptionRequest>,
+  remove_sender : mpsc::Sender<SubscriptionKey>,
+  remove_receiver : mpsc::Receiver<SubscriptionKey>,
+  subs : SlotMap<SubscriptionKey, Subscription>,
+}
+
 impl NotificationProcessor {
+  async fn spawn(conn : &Arc<ConnectionCore>)
+                 -> Result<mpsc::Sender<SubscriptionRequest>> {
+    let conn = conn.clone();
+    let (add_sender, add_receiver) = mpsc::channel();
+    let (remove_sender, remove_receiver) = mpsc::channel();
+    let subs = SlotMap::new();
+    // xxx need socket for notifications!
+    // xxx need to request notifications inband
+    let processor = NotificationProcessor {
+      add : add_receiver,
+      conn, remove_sender, remove_receiver, subs
+    };
+    task::spawn(processor.task());
+    Ok(add_sender)
+  }
+
   async fn task(&mut self) {
     loop {
       tokio::select! {
@@ -401,8 +420,7 @@ impl NotificationProcessor {
   }
 }
 
-                   
-
+impl Connection {                   
   pub async fn notify_subscribe(&self, pin : Pin,
                                 expected_spec : Option<Option<Level>>)
                                 -> Result<Subscription> {
@@ -410,9 +428,17 @@ impl NotificationProcessor {
     // If expected_spec is not None, reads the gpio once at the start,
     // and sends a notification with no Tick if expected_spec is not
     // Some(Some(the current level)).
+
+    let mut notify_add = self.notify_add.lock();
+    if notify_add.is_none() {
+      *notify_add = Some(NotificationProcessor::spawn().await?);
+    }
+
     let (wsender, wreceiver) = watch::channel();
     let (dsender, dreceiver) = oneshot::channel();
-    self.notify_add.send(( pin, wsender, dreceiver, expected_spec ))
+    notify.send(( pin, wsender, dreceiver, expected_spec ))
       .await.expect("notify task died?");
+
     Ok(Subscription { wreceiver, dsender })
   }
+}
