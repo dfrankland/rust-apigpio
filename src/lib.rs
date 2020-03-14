@@ -43,6 +43,8 @@ pub enum Error {
   ProtocolBadGpioMode(Word),
   #[error("pigpiod sent unexpected level value {0}")]
   ProtocolBadLevel(Word),
+  #[error("pigpiod sent unexpected boolean value {0}")]
+  ProtocolBadBoolean(Word),
   #[error("pigpiod sent reply which did not match our command")]
   ProtocolReplyMismatch(Box<(MessageBuf,MessageBuf)>),
 }
@@ -230,11 +232,21 @@ impl Connection {
   pub async fn wave_send_repeat(&self, wave: WaveId) -> Result<Word> {
     self.cmdr(PI_CMD_WVTXR, wave.0, 0).await
   }
+  pub async fn wave_tx_stop(&self) -> Result<()> {
+    self.cmd0(PI_CMD_WVHLT, 0,0).await
+  }
   pub async fn wave_tx_at(&self) -> Result<Option<WaveId>> {
     match self.cmdr(PI_CMD_WVTAT, 0,0).await? {
       PI_NO_TX_WAVE     => Ok(None),
       PI_WAVE_NOT_FOUND => Err(WaveNotFound),
       wave              => Ok(Some(WaveId(wave))),
+    }
+  }
+  pub async fn wave_tx_busy(&self) -> Result<bool> {
+    match self.cmdr(PI_CMD_WVBSY, 0,0).await? {
+      0     => Ok(false),
+      1     => Ok(true),
+      wrong => Err(ProtocolBadBoolean(wrong)),
     }
   }
 
@@ -245,6 +257,9 @@ impl Connection {
     //
     // If *any* calls to this function use *SYNC*, then wave_delete
     // is potentially unsafe and all calls to it must be checked.
+    //
+    // Note that because everything is shared amongst all clients of
+    // pigpiod, this might involve auditing your process handling etc.
     //
     // Caller must also ensure that txmode is a valid value.
     self.cmdr(PI_CMD_WVTXM, wave.0, txmode).await
