@@ -35,8 +35,10 @@ pub enum Error {
   BadLevel(usize),
   #[error("pigpiod unexpectedly sent positive return value {0}")]
   ProtocolBadReturn(Word),
-  #[error("pigpiod sent unexpected gpio mode {0}")]
+  #[error("pigpiod sent unexpected gpio mode value {0}")]
   ProtocolBadGpioMode(Word),
+  #[error("pigpiod sent unexpected level value {0}")]
+  ProtocolBadLevel(Word),
   #[error("pigpiod sent reply which did not match our command")]
   ProtocolReplyMismatch(Box<(MessageBuf,MessageBuf)>),
 }
@@ -71,6 +73,8 @@ pub enum Level {
   H = 1,
 }
 
+pub type Pin = Word;
+
 use Level::*;
 
 impl TryFrom<usize> for Level {
@@ -83,6 +87,15 @@ impl TryFrom<usize> for Level {
     })
   }
 }
+macro_rules! level_try_from { { $t:ident } => {
+  impl TryFrom<$t> for Level {
+    type Error = Error;
+    fn try_from(u : $t) -> Result<Level> { Self::try_from(u as usize) }
+  }
+} }
+level_try_from!{u32}
+level_try_from!{u16}
+level_try_from!{u8}
 
 impl Level {
   pub fn u(u : usize) -> Level {
@@ -161,10 +174,10 @@ impl Connection {
     Ok(())
   }
   
-  pub async fn set_mode(&self, pin : Word, mode : GpioMode) -> Result<()> {
+  pub async fn set_mode(&self, pin : Pin, mode : GpioMode) -> Result<()> {
     self.cmd0(PI_CMD_MODES, pin, mode as Word).await
   }
-  pub async fn get_mode(&self, pin : Word) -> Result<GpioMode> {
+  pub async fn get_mode(&self, pin : Pin) -> Result<GpioMode> {
     let mode = self.cmdr(PI_CMD_MODEG, pin, 0).await?;
     <GpioMode>::from_u32(mode).ok_or_else(|| ProtocolBadGpioMode(mode))
   }
@@ -177,11 +190,11 @@ impl Connection {
     };
     self.cmd0(PI_CMD_MODES, pin, mode).await
   }
-/*
-  pub int gpio_read(int pi, unsigned gpio)
-   {return pigpio_command(pi, PI_CMD_READ, gpio, 0, 1);}
-
-int gpio_write(int pi, unsigned gpio, unsigned level)
-   {return pigpio_command(pi, PI_CMD_WRITE, gpio, level, 1);}
-*/
+  pub async fn gpio_read(&self, pin : Pin) -> Result<Level> {
+    let level = self.cmdr(PI_CMD_READ, pin, 0).await?;
+    <Level>::try_from(level).map_err(|_| ProtocolBadLevel(level))
+  }
+  pub async fn gpio_write(&self, pin : Pin, level : Level) -> Result<()> {
+    self.cmd0(PI_CMD_WRITE, pin, level as Word).await
+  }
 }
