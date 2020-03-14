@@ -52,8 +52,44 @@ use Error::*;
 
 pub type Result<T> = std::result::Result<T,Error>;
 
+type Tick = Word;
+
+pub struct GpioChange {
+  pin : Pin,
+  level : Level,
+  tick : Option<Tick>, // None for the initial notification
+  sequence : Word, // increments by 1 each time; allows spotting lost events
+};
+
+struct Subscription {
+  wreceiver : watch::Receiver<GpioChange>,
+  dsender : oneshot::Sender<()>,
+}
+impl Deref for Subscription {
+  type Item = watch::Receiver<GpioChange>;
+}
+
+pub struct SubscriptionRecord {
+  client : broadcast::channel::Sender<>,
+  pin : Pin,
+  previously : Option<Word>,
+}
+
+slotmap::new_key_type! { struct SubscriptionKey; };
+
+type SubscriptionRequest =
+  (Pin, broadcast::Sender, oneshot::Receiver, Option<Option<Level>>);
+
+struct NotificationProcessor {
+  conn : Arc<Mutex<TcpStream>>,
+  add : mpsc::Receiver<SubscriptionRequest>,
+  remove : mpsc::Receiver<SubscriptionKey>,
+  subs : SlotMap<SubscriptionKey, Subscription>,
+}
+
 pub struct Connection {
-  conn : Mutex<TcpStream>,
+  conn : Arc<Mutex<TcpStream>>,
+  notify : Mutex<Option<mpsc::Sender<SubscriptionRequest>>>,
 }
 
 const PI_ENVPORT : &str = "PIGPIO_PORT";
@@ -151,26 +187,12 @@ fn default_addr() -> Result<String> {
   Ok(spec.unwrap().to_owned())
 }
 
-impl Connection {
-  pub async fn new_at<A : tokio::net::ToSocketAddrs>(addr : &A)
-                      -> Result<Connection> {
-    let conn = TcpStream::connect(addr).await?;
-    let conn = Mutex::new(conn);
-    Ok(Connection { conn })
-  }
-
-  pub async fn new() -> Result<Connection> {
-    let addr = default_addr()?;
-    let sockaddr = (addr.as_ref(), default_port()?);
-    Connection::new_at(&sockaddr).await
-  }
-
-  pub async fn cmd_extra(&self,
-                         cmd : Word, p1 : Word, p2 : Word, p3 : Word,
-                         extra : &[u8])
-                         -> Result<Word> {
-    let mut conn = self.conn.lock().await;
-    let mut cmsg = [0u8; 16];
+async fn cmd_extra(conn : &Arc<Mutex<TcpStream>,
+                   cmd : Word, p1 : Word, p2 : Word, p3 : Word,
+                   extra : &[u8])
+                   -> Result<Word> {
+  let mut conn = conn.lock().await;
+  let mut cmsg = [0u8; 16];
     {
       let mut i = 0;
       let mut f = |v| {
@@ -193,6 +215,21 @@ impl Connection {
     if res < 0 { return Err(Error::Pi(res)); }
     Ok(res as Word)
   }
+
+impl Connection {
+  pub async fn new_at<A : tokio::net::ToSocketAddrs>(addr : &A)
+                      -> Result<Connection> {
+    let conn = TcpStream::connect(addr).await?;
+    let conn = Mutex::new(conn);
+    Ok(Connection { conn })
+  }
+
+  pub async fn new() -> Result<Connection> {
+    let addr = default_addr()?;
+    let sockaddr = (addr.as_ref(), default_port()?);
+    Connection::new_at(&sockaddr).await
+  }
+
   pub async fn cmdr(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<Word> {
     self.cmd_extra(cmd,p1,p2,0,&[0;0]).await
   }
@@ -297,3 +334,71 @@ impl Connection {
     self.cmdr(PI_CMD_WVTXM, wave.0, txmode).await
   }
 }
+
+async fn notify_task(&mut n : NotificationProcessor) {
+    loop {
+      tokio::select! {
+        (pin, wsender, dreceiver, expected_spec) = n.add.recv() => {
+          let previously = if let Some(expected) = expected_spec {
+            let actual = cmdr_extra(&n.conn, PI_CMD_READ, pin, 0).await?;
+            let actual = <Level>::try_from(actual)?;
+            let sequence = 0;
+            if expected != Some(actual) {
+              wsender.broadcast(
+                GpioChange { pin, level : actual, tick : None, sequence }
+              ).ok();
+            }
+            Some(actual)
+          } else {
+            None
+          };
+          let record = SubscriptionRecord {
+            client : wsender,
+            pin,
+            previously : (previously as Word) << pin,
+            sequence,
+          };
+          let subk = n.subs.insert(record);
+          let tremove = remove.clone();
+          task::spawn(async move {
+            dreceiver.await.unwrap_err();
+            tremove.send(subk).await.ok();
+          });
+        },
+
+        () = thing.read => {
+          let (seqno, tick, flags, levels) = thing;
+          for ref mut record in n.subs {
+            let mask = 1u32 << record.pin;
+            let thisbit = levels & mask;
+            if record.previously != Some(thisbit) {
+              record.sequence += 1;
+              let level = Level::b(thisbit != 0);
+              record.client.broadcast(
+                GpioChange { pin, level, tick, sequence : record.sequence }
+              ).ok();
+              record.previously = Some(thisbit);
+            }
+          }
+        }
+        unsubk = n.remove.recv() => {
+          let unsub = n.remove(unsubk).unwrap();
+          // drop unusb
+        },
+      }
+    }
+  }
+
+  pub async fn notify_subscribe(&self, pin : Pin,
+                                expected_spec : Option<Option<Level>>)
+                                -> Result<Subscription> {
+    // Arranges to send GpioChange to Subscription
+    // If expected_spec is not None, reads the gpio once at the start,
+    // and sends a notification with no Tick if expected_spec is not
+    // Some(Some(the current level)).
+    let (wsender, wreceiver) = watch::channel();
+    let (dsender, dreceiver) = oneshot::channel();
+    self.notify_add.send(( pin, wsender, dreceiver, expected_spec ))
+      .await.expect("notify task died?");
+    Ok(Subscription { wreceiver, dsender })
+  }
