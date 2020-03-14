@@ -336,10 +336,12 @@ impl Deref for Subscription {
   type Target = watch::Receiver<GpioChange>;
 }
 
+#[derive(Copy)]
 pub struct SubscriptionRecord {
   client : mpsc::Sender<GpioChange>,
   pin : Pin,
-  previously : Option<Word>,
+  previously : Option<Word>, // None means sender not ever notified yet
+  sequence : Word,
 }
 
 slotmap::new_key_type! { struct SubscriptionKey; }
@@ -352,20 +354,20 @@ type SubscriptionRequest = (
 );
 
 struct NotificationProcessor {
-  conn : Arc<Mutex<TcpStream>>,
+  conn : Arc<ConnectionCore>,
   add : mpsc::Receiver<SubscriptionRequest>,
   remove_sender : mpsc::Sender<SubscriptionKey>,
   remove_receiver : mpsc::Receiver<SubscriptionKey>,
-  subs : SlotMap<SubscriptionKey, Subscription>,
+  subs : SlotMap<SubscriptionKey, SubscriptionRecord>,
 }
 
 impl NotificationProcessor {
   async fn spawn(conn : &Arc<ConnectionCore>)
                  -> Result<mpsc::Sender<SubscriptionRequest>> {
     let conn = conn.clone();
-    let (add_sender, add_receiver) = mpsc::channel();
-    let (remove_sender, remove_receiver) = mpsc::channel();
-    let subs = SlotMap::new();
+    let (add_sender, add_receiver) = mpsc::channel(5);
+    let (remove_sender, remove_receiver) = mpsc::channel(20);
+    let subs = SlotMap::with_key();
     // xxx need socket for notifications!
     // xxx need to request notifications inband
     let processor = NotificationProcessor {
@@ -376,37 +378,41 @@ impl NotificationProcessor {
     Ok(add_sender)
   }
 
+  async fn do_add(&mut self, req : SubscriptionRequest) {
+    let (pin, wsender, dreceiver, expected_spec) = req;
+    let sequence = 0;
+    let previously = if let Some(expected) = expected_spec {
+      let actual = self.conn.cmd_raw(&self.conn, PI_CMD_READ, pin, 0)
+        .await?;
+      let actual = <Level>::try_from(actual)?;
+      if expected != Some(actual) {
+        wsender.broadcast(
+          GpioChange { pin, level : actual, tick : None, sequence }
+        ).ok();
+      }
+      Some(actual)
+    } else {
+      None
+    };
+    let record = SubscriptionRecord {
+      client : wsender,
+      pin,
+      previously : (previously as Word) << pin,
+      sequence,
+    };
+    let subk = self.subs.insert(record);
+    let tremove = self.remove_sender.clone();
+    task::spawn(async move {
+      dreceiver.await.unwrap_err();
+      tremove.send(subk).await.ok();
+    });
+  }
+
   async fn task(&mut self) {
     loop {
       tokio::select! {
-        (pin, wsender, dreceiver, expected_spec) = self.add.recv() => {
-          let sequence = 0;
-          let previously = if let Some(expected) = expected_spec {
-            let actual = self.conn.cmd_raw(&self.conn, PI_CMD_READ, pin, 0)
-              .await?;
-            let actual = <Level>::try_from(actual)?;
-            if expected != Some(actual) {
-              wsender.broadcast(
-                GpioChange { pin, level : actual, tick : None, sequence }
-              ).ok();
-            }
-            Some(actual)
-          } else {
-            None
-          };
-          let record = SubscriptionRecord {
-            client : wsender,
-            pin,
-            previously : (previously as Word) << pin,
-            sequence,
-          };
-          let subk = self.subs.insert(record);
-          let tremove = self.remove_sender.clone();
-          task::spawn(async move {
-            dreceiver.await.unwrap_err();
-            tremove.send(subk).await.ok();
-          });
-        },
+        adding = self.add.recv() => match adding {
+          Some(req) => self.do_add()?;
 /* xxx
         () = thing.read => {
           let (seqno, tick, flags, levels) = thing;
@@ -423,7 +429,7 @@ impl NotificationProcessor {
             }
           }
         }*/
-        unsubk = self.remove.recv() => {
+        unsubk = self.remove_receiver.recv() => {
           let unsub = self.remove(unsubk).unwrap();
           // drop unusb
         },
