@@ -2,7 +2,10 @@
 PIGPIO ?= ../../../pigpio
 PIGPIO_H ?= $(PIGPIO)/pigpio.h
 
-all: mod.rs
+all: mod.rs pigpio.h
 
-mod.rs:	converter $(PIGPIO_H)
+pigpio.h: $(PIGPIO_H)
+	cp $^ $@.tmp && mv $@.tmp $@
+
+mod.rs:	converter pigpio.h
 	./$^ >$@.tmp && mv $@.tmp $@
