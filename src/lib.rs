@@ -91,9 +91,9 @@ impl fmt::Display for WaveId {
 }
 
 pub struct Pulse {
-  on_mask:  Word,
-  off_mask: Word,
-  us_delay: Word,
+  pub on_mask:  Word,
+  pub off_mask: Word,
+  pub us_delay: Word,
 }
 
 use Level::*;
