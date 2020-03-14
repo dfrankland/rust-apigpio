@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-//use tokio::prelude::*;
+use tokio::prelude::*;
 
 #[derive(Error,Debug)]
 pub enum Error {
@@ -83,7 +83,7 @@ impl Connection {
   }
 
   pub async fn cmd0(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<()> {
-    let conn = self.conn.lock().await;
+    let mut conn = self.conn.lock().await;
     let mut m = [0u8; 16];
     {
       let mut i = 0;
@@ -95,8 +95,9 @@ impl Connection {
       f(cmd);
       f(p1);
       f(p2);
-      Ok(())
     }
+    conn.write_all(&m).await?;
+    Ok(())
   }
   
   pub async fn set_mode(&self, pin : Word, mode : GpioMode) -> Result<()> {
