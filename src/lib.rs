@@ -35,6 +35,8 @@ pub enum Error {
   DaemonComms(#[from] tokio::io::Error),
   #[error("invalid Level value {0} (should be 0 or 1)")]
   BadLevel(usize),
+  #[error("wave_tx_at reports PI_WAVE_NOT_FOUND")]
+  WaveNotFound,
   #[error("pigpiod unexpectedly sent positive return value {0}")]
   ProtocolBadReturn(Word),
   #[error("pigpiod sent unexpected gpio mode value {0}")]
@@ -207,5 +209,44 @@ impl Connection {
   }
   pub async fn gpio_write(&self, pin : Pin, level : Level) -> Result<()> {
     self.cmd0(PI_CMD_WRITE, pin, level as Word).await
+  }
+
+  pub async fn wave_clear(&self) -> Result<()> {
+    self.cmd0(PI_CMD_WVCLR, 0,0).await
+  }
+  pub async fn wave_add_new(&self) -> Result<WaveId> {
+    Ok(WaveId( self.cmdr(PI_CMD_WVNEW, 0,0).await? ))
+  }
+  pub async fn wave_create(&self) -> Result<WaveId> {
+    Ok(WaveId( self.cmdr(PI_CMD_WVCRE, 0,0).await? ))
+  }
+  pub async fn wave_delete(&self, wave : WaveId) -> Result<()> {
+    self.cmd0(PI_CMD_WVDEL, wave.0, 0).await
+  }
+
+  pub async fn wave_send_once(&self, wave: WaveId) -> Result<Word> {
+    self.cmdr(PI_CMD_WVTX, wave.0, 0).await
+  }
+  pub async fn wave_send_repeat(&self, wave: WaveId) -> Result<Word> {
+    self.cmdr(PI_CMD_WVTXR, wave.0, 0).await
+  }
+  pub async fn wave_tx_at(&self) -> Result<Option<WaveId>> {
+    match self.cmdr(PI_CMD_WVTAT, 0,0).await? {
+      PI_NO_TX_WAVE     => Ok(None),
+      PI_WAVE_NOT_FOUND => Err(WaveNotFound),
+      wave              => Ok(Some(WaveId(wave))),
+    }
+  }
+
+  pub async unsafe fn wave_send_using_mode(&self, wave: WaveId, txmode : Word)
+                                           -> Result<Word> {
+    // Caller must ensure that if txmode is *SYNC* the "bad things"
+    // described in the pigpio docs do not happen.
+    //
+    // If *any* calls to this function use *SYNC*, then wave_delete
+    // is potentially unsafe and all calls to it must be checked.
+    //
+    // Caller must also ensure that txmode is a valid value.
+    self.cmdr(PI_CMD_WVTXM, wave.0, txmode).await
   }
 }
