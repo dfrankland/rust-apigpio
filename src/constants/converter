@@ -4,6 +4,10 @@ use strict;
 use autodie;
 use Carp;
 
+print <<END;
+#![allow(dead_code)]
+END
+
 our $def_s = '';
 our $ec_lookup = <<END;
 #[allow(non_snake_case)]

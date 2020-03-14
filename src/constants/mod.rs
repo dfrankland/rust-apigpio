@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 /* BSC FIFO size */
 /* gpio: 0-53 */
 pub const PI_MIN_GPIO : u32 = 0;

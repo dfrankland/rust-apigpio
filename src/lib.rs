@@ -1,7 +1,6 @@
 
-#![allow(dead_code)]
-
 mod constants;
+use constants::*;
 
 use std::env;
 
