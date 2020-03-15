@@ -191,34 +191,41 @@ impl Deref for Connection {
   fn deref(&self) -> &Self::Target { &self.conn }
 }
 
+async fn cmd_raw(conn : &mut TcpStream,
+                 cmd : Word, p1 : Word, p2 : Word, p3 : Word,
+                 extra : &[u8])
+                 -> Result<Word> {
+  let mut cmsg = [0u8; 16];
+  {
+    let mut i = 0;
+    let mut f = |v| {
+      *array_mut_ref![cmsg,i,4] = u32::to_le_bytes(v);
+      i += 4;
+    };
+    f(cmd);
+    f(p1);
+    f(p2);
+    f(p3);
+  }
+  conn.write_all(&cmsg).await?;
+  conn.write_all(extra).await?;
+  let mut rmsg = [0u8; 16];
+  conn.read_exact(&mut rmsg).await?;
+  if rmsg[0..12] != cmsg[0..12] {
+    return Err(ProtocolReplyMismatch(Box::new((cmsg,rmsg))))
+  }
+  let res = i32::from_le_bytes(*array_ref![rmsg,12,4]);
+  if res < 0 { return Err(Error::Pi(res)); }
+  Ok(res as Word)
+}
+
 impl ConnectionCore {
   async fn cmd_raw(&self,
                    cmd : Word, p1 : Word, p2 : Word, p3 : Word,
                    extra : &[u8])
                    -> Result<Word> {
     let mut conn = self.conn.lock().await;
-    let mut cmsg = [0u8; 16];
-    {
-      let mut i = 0;
-      let mut f = |v| {
-        *array_mut_ref![cmsg,i,4] = u32::to_le_bytes(v);
-        i += 4;
-      };
-      f(cmd);
-      f(p1);
-      f(p2);
-      f(p3);
-    }
-    conn.write_all(&cmsg).await?;
-    conn.write_all(extra).await?;
-    let mut rmsg = [0u8; 16];
-    conn.read_exact(&mut rmsg).await?;
-    if rmsg[0..12] != cmsg[0..12] {
-      return Err(ProtocolReplyMismatch(Box::new((cmsg,rmsg))))
-    }
-    let res = i32::from_le_bytes(*array_ref![rmsg,12,4]);
-    if res < 0 { return Err(Error::Pi(res)); }
-    Ok(res as Word)
+    cmd_raw(&mut conn, cmd,p1,p2,p3, extra).await
   }
 
   pub async fn cmdr(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<Word> {
