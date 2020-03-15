@@ -10,5 +10,11 @@ async fn main() {
   println!("connected");
   let m = conn.get_mode(pin).await.expect("getmode");
   println!("gpio mode {}", m);
+  let mut sub = conn.notify_subscribe(pin, true, false)
+    .await.expect("subscribe");
+  loop {
+    let trans = sub.recv().await;
+    println!("{:?}", trans);
+  }
 }
                                                      

@@ -375,6 +375,9 @@ impl Deref for Subscription {
   type Target = watch::Receiver<GpioChange>;
   fn deref(&self) -> &Self::Target { &self.wreceiver }
 }
+impl DerefMut for Subscription {
+  fn deref_mut(&mut self) -> &mut Self::Target { &mut self.wreceiver }
+}
 
 #[derive(Debug)]
 pub struct SubscriptionRecord {
