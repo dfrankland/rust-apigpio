@@ -437,12 +437,6 @@ impl<'a> DerefMut for NotifySubs<'a> {
 }
 
 impl NotifyInTask {
-  async fn lock_shared<'b, 'a : 'b>(&'a self) -> NotifySubs<'b> {
-    let guard = self.conn.notify.lock().await;
-    if guard.is_idle() { panic!(); }
-    NotifySubs { guard }
-  }
-
   async fn task(&mut self) -> Result<()> {
     let mut reportbuf = [0u8; 12];
     loop {
@@ -453,7 +447,7 @@ impl NotifyInTask {
         _ = self.stream.read_exact(&mut reportbuf) => {
           let tick   = u32::from_le_bytes(*array_ref![reportbuf,4,4]);
           let levels = u32::from_le_bytes(*array_ref![reportbuf,8,4]);
-          let mut shared = self.lock_shared().await;
+          let mut shared = self.conn.lock_notify_shared().await;
           for (_, mut sub) in &mut shared.subs {
             let mask = 1 << sub.pin;
             let now = levels & mask;
@@ -481,12 +475,13 @@ impl NotifyInTask {
           }
         },
         unsubk = self.remove_receiver.recv() => {
-          let mut shared = self.lock_shared().await;
+          let mut shared = self.conn.lock_notify_shared().await;
           shared.subs.remove(unsubk.unwrap()).unwrap();
           let conn = self.conn.clone();
           task::spawn(async move {
             task::yield_now().await;
-            conn.notify_tell_pigpiod().await
+            let mut shared = conn.lock_notify_shared().await;
+            conn.notify_tell_pigpiod_locked(&mut shared).await
               .unwrap_or(() /* failed to deregister, ah well */);
           });
         },
@@ -496,14 +491,19 @@ impl NotifyInTask {
 }
 
 impl ConnectionCore {
-  async fn notify_tell_pigpiod_locked(&self, _shared : &mut NotifyShared)
-                                      -> Result<()> {
-    // xxx
-    Ok(())
+  async fn lock_notify_shared<'b, 'a : 'b>(&'a self) -> NotifySubs<'b> {
+    let guard = self.notify.lock().await;
+    if guard.is_idle() { panic!(); }
+    NotifySubs { guard }
   }
-  async fn notify_tell_pigpiod(&self) -> Result<()> {
-    // xxx
-    Ok(())
+
+  async fn notify_tell_pigpiod_locked(&self, shared : &mut NotifyShared)
+                                      -> Result<()> {
+    let mut mask = 0;
+    for (_, sub) in &shared.subs {
+      mask |= 1 << sub.pin;
+    }
+    self.cmd0(PI_CMD_NB, shared.nhandle, mask).await
   }
 }
 
