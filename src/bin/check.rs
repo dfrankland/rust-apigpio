@@ -13,7 +13,7 @@ async fn main() {
   let mut sub = conn.notify_subscribe(pin, true, false)
     .await.expect("subscribe");
   loop {
-    let trans = sub.recv().await;
+    let trans = sub.recv().await.expect("event");
     println!("{:?}", trans);
   }
 }
