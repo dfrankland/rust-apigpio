@@ -1,9 +1,6 @@
 
 use apigpio::*;
 
-use std::time;
-use tokio::time::delay_for;
-
 #[tokio::main]
 async fn main() {
   let mut args = std::env::args();
@@ -13,14 +10,11 @@ async fn main() {
   println!("connected");
   let m = conn.get_mode(pin).await.expect("getmode");
   println!("gpio mode {}", m);
-  {
-    let mut sub = conn.notify_subscribe(pin, true, false)
-      .await.expect("subscribe");
-    for _i in 0..3 {
-      let trans = sub.recv().await.expect("event");
-      println!("{:?}", trans);
-    }
+  let mut sub = conn.notify_subscribe(pin, true, false)
+    .await.expect("subscribe");
+  loop {
+    let trans = sub.recv().await.expect("event");
+    println!("{:?}", trans);
   }
-  delay_for(time::Duration::from_millis(500)).await;
 }
                                                      
