@@ -3,9 +3,12 @@ use apigpio::*;
 
 #[tokio::main]
 async fn main() {
+  let mut args = std::env::args();
+  let _ : String = args.next().expect("argv0");
+  let pin : Pin = args.next().expect("missing pin").parse().expect("bad pin");
   let conn = Connection::new().await.expect("connect");
   println!("connected");
-  let m = conn.get_mode(14).await.expect("getmode");
+  let m = conn.get_mode(pin).await.expect("getmode");
   println!("gpio mode {}", m);
 }
                                                      
