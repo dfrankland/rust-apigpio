@@ -104,6 +104,8 @@ pub type Pin = Word;
 #[derive(Debug,PartialEq,Eq,Copy,Clone)]
 pub struct WaveId (pub Word);
 
+const TICK_KEEPALIVE_US : Word = 60000000;
+
 impl fmt::Display for WaveId {
   fn fmt(&self, fmt : &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
     write!(fmt, "WaveId{}", self.0)
@@ -380,6 +382,7 @@ pub struct SubscriptionRecord {
   client : watch::Sender<GpioChange>,
   previously : Option<Word>, // None means sender not ever notified yet
   sequence : Word,
+  tick_last_keepalive : Option<Option<Word>>,
 }
 
 slotmap::new_key_type! { struct SubscriptionKey; }
@@ -387,6 +390,7 @@ slotmap::new_key_type! { struct SubscriptionKey; }
 type NotifyMap = DenseSlotMap<SubscriptionKey, SubscriptionRecord>;
 
 struct NotifyShared {
+  nhandle : Word,
   subs : NotifyMap,
   remove_sender : mpsc::Sender<SubscriptionKey>,
 }
@@ -394,35 +398,20 @@ struct NotifyShared {
 enum NotifyInCore {
   Active(NotifyShared),
   Idle { for_shutdown : mpsc::Receiver<()> },
-  Forbidden,
 }
 
 impl NotifyInCore {
   fn is_idle(&self) -> bool { match self {
     NotifyInCore::Active(_) => false,
     NotifyInCore::Idle{..} => true,
-    NotifyInCore::Forbidden => panic!(),
   } }
 }
 
 struct NotifyInTask {
   conn : Arc<ConnectionCore>,
+  stream : TcpStream,
   shutdown_receiver : mpsc::Receiver<()>,
   remove_receiver : mpsc::Receiver<SubscriptionKey>,
-}
-
-impl SubscriptionRecord {
-  fn notify(&mut self, level : Level, tick : Option<Tick>) {
-    // trickily, this means sequence on our first actual notification is
-    // 1, whereas the thing we put into the watch when we create it is 0
-    self.sequence += 1;
-    self.client.broadcast(GpioChange {
-        pin : self.pin,
-        level : Some(level), sequence : self.sequence,
-        tick
-    }).ok();
-    self.previously = Some((level as Word) << self.pin);
-  }
 }
 
 struct NotifySubs<'a> {
@@ -455,25 +444,42 @@ impl NotifyInTask {
   }
 
   async fn task(&mut self) -> Result<()> {
+    let mut reportbuf = [0u8; 12];
     loop {
       tokio::select! {
-        _ = self.shutdown_receiver.recv() => return Ok(()),
-/* xxx
-        () = thing.read => {
-          let (seqno, tick, flags, levels) = thing;
-          for ref mut record in self.subs {
-            let mask = 1u32 << record.pin;
-            let thisbit = levels & mask;
-            if record.previously != Some(thisbit) {
-              record.sequence += 1;
-              let level = Level::b(thisbit != 0);
-              record.client.broadcast(
-                GpioChange { pin, level, tick, sequence : record.sequence }
-              ).ok();
-              record.previously = Some(thisbit);
+        _ = self.shutdown_receiver.recv() => {
+          return Ok(());
+        },
+        _ = self.stream.read_exact(&mut reportbuf) => {
+          let tick   = u32::from_le_bytes(*array_ref![reportbuf,4,4]);
+          let levels = u32::from_le_bytes(*array_ref![reportbuf,8,4]);
+          let mut shared = self.lock_shared().await;
+          for (_, mut sub) in &mut shared.subs {
+            let mask = 1 << sub.pin;
+            let now = levels & mask;
+            let (do_keepalive, new_last_keepalive)
+              = match sub.tick_last_keepalive {
+                None =>       (false, None),
+                Some(None) => (false, Some(Some(tick))),
+                Some(Some(then)) => (tick - then > TICK_KEEPALIVE_US,
+                                      Some(Some(tick))),
+              };
+            if sub.previously != Some(now) || do_keepalive {
+              // trickily, this means sequence on our first actual
+              // notification is 1, whereas the thing we put into the
+              // watch when we create it is 0
+              sub.sequence += 1;
+              sub.previously = Some(now);
+              sub.tick_last_keepalive = new_last_keepalive;
+              sub.client.broadcast(GpioChange {
+                pin : sub.pin,
+                level : Some(Level::b(now != 0)),
+                tick : Some(tick),
+                sequence : sub.sequence,
+              }).ok();
             }
           }
-        }*/
+        },
         unsubk = self.remove_receiver.recv() => {
           let mut shared = self.lock_shared().await;
           shared.subs.remove(unsubk.unwrap()).unwrap();
@@ -502,7 +508,9 @@ impl ConnectionCore {
 }
 
 impl Connection {
-  pub async fn notify_subscribe(&self, pin : Pin, read_initially : bool)
+  pub async fn notify_subscribe(&self, pin : Pin,
+                                read_initially : bool,
+                                tick_keepalives : bool)
                                 -> Result<Subscription> {
     // Arranges to send GpioChange to Subscription
     // If expected_spec is not None, reads the gpio once at the start,
@@ -511,10 +519,13 @@ impl Connection {
 
     let mut notify_locked = self.notify.lock().await;
     if notify_locked.is_idle() {
+      let mut stream = connect_from_addrs(&self.addrs).await?;
+      let nhandle = cmd_raw(&mut stream, PI_CMD_NOIB,0,0,0, &[0;0]).await?;
+
       let subs = DenseSlotMap::with_key();
       let (remove_sender, remove_receiver) = mpsc::channel(20);
       let active = NotifyInCore::Active(
-        NotifyShared { subs, remove_sender }
+        NotifyShared { nhandle, subs, remove_sender }
       );
       let was = replace(notify_locked.deref_mut(), active);
       let shutdown_receiver = match was {
@@ -522,10 +533,9 @@ impl Connection {
         _ => panic!(),
       };
       let conn = self.conn.clone();
-      // xxx need socket for notifications!
 
       let mut processor =
-        NotifyInTask { conn, shutdown_receiver, remove_receiver, };
+        NotifyInTask { conn, stream, shutdown_receiver, remove_receiver, };
       task::spawn(async move {
         processor.task().await.expect("gpio change notification task died");
       });
@@ -546,6 +556,7 @@ impl Connection {
       client : wsender,
       previously : None,
       sequence : 0,
+      tick_last_keepalive : if tick_keepalives { Some(None) } else { None },
     };
 
     let subk = shared.subs.insert(record);
@@ -555,7 +566,8 @@ impl Connection {
       let level = self.conn.gpio_read(pin).await?;
       let record = &mut shared.subs[subk];
       record.previously = Some((level as Word) << pin);
-      record.client.broadcast(GpioChange { level : Some(level), ..initial });
+      record.client.broadcast(GpioChange { level : Some(level), ..initial })
+        .ok();
     }
 
     let mut tremove = shared.remove_sender.clone();
