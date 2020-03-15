@@ -7,13 +7,14 @@ use std::env;
 use thiserror::Error;
 
 use tokio::net::TcpStream;
-use tokio::sync::{Mutex,mpsc,oneshot,watch};
+use tokio::sync::{Mutex,MutexGuard,mpsc,oneshot,watch};
 use tokio::task;
 use tokio::prelude::*;
 
 use std::convert::TryFrom;
-use std::ops::Deref;
+use std::ops::{Deref,DerefMut};
 use std::sync::Arc;
+use std::mem::replace;
 
 use arrayref::*;
 use num_traits::FromPrimitive;
@@ -61,11 +62,12 @@ type Tick = Word;
 
 pub struct Connection {
   conn : Arc<ConnectionCore>,
-  notify_add : Mutex<Option<mpsc::Sender<SubscriptionRequest>>>,
+  _notify_shutdown_sender : mpsc::Sender<()>,
 }
 
 pub struct ConnectionCore {
   conn : Mutex<TcpStream>,
+  notify : Mutex<NotifyInCore>,
 }
 
 const PI_ENVPORT : &str = "PIGPIO_PORT";
@@ -167,10 +169,14 @@ impl Connection {
   pub async fn new_at<A : tokio::net::ToSocketAddrs>(addr : &A)
                       -> Result<Connection> {
     let conn = TcpStream::connect(addr).await?;
-    let conn = Mutex::new(conn);
-    let conn = ConnectionCore { conn };
-    let conn = Arc::new(conn);
-    Ok(Connection { conn, notify_add : Mutex::new(None) })
+    Connection::new_from_socket(conn)
+  }
+
+  fn new_from_socket(conn : TcpStream) -> Result<Connection> {
+    let (shutdown_sender, for_shutdown) = mpsc::channel(1);
+    let notify = Mutex::new(NotifyInCore::Idle { for_shutdown });
+    let core = Arc::new(ConnectionCore { conn : Mutex::new(conn), notify });
+    Ok(Connection { conn : core, _notify_shutdown_sender : shutdown_sender })
   }
 
   pub async fn new() -> Result<Connection> {
@@ -339,28 +345,41 @@ impl Deref for Subscription {
   fn deref(&self) -> &Self::Target { &self.wreceiver }
 }
 
+#[derive(Debug)]
 pub struct SubscriptionRecord {
-  client : watch::Sender<GpioChange>,
   pin : Pin,
+  client : watch::Sender<GpioChange>,
   previously : Option<Word>, // None means sender not ever notified yet
   sequence : Word,
 }
 
 slotmap::new_key_type! { struct SubscriptionKey; }
 
-type SubscriptionRequest = (
-  Pin,
-  watch::Sender<GpioChange>,
-  oneshot::Receiver<()>,
-  Option<Option<Level>>
-);
+type NotifyMap = DenseSlotMap<SubscriptionKey, SubscriptionRecord>;
 
-struct NotificationProcessor {
-  conn : Arc<ConnectionCore>,
-  add : mpsc::Receiver<SubscriptionRequest>,
+struct NotifyShared {
+  subs : NotifyMap,
   remove_sender : mpsc::Sender<SubscriptionKey>,
+}
+
+enum NotifyInCore {
+  Active(NotifyShared),
+  Idle { for_shutdown : mpsc::Receiver<()> },
+  Forbidden,
+}
+
+impl NotifyInCore {
+  fn is_idle(&self) -> bool { match self {
+    NotifyInCore::Active(_) => false,
+    NotifyInCore::Idle{..} => true,
+    NotifyInCore::Forbidden => panic!(),
+  } }
+}
+
+struct NotifyInTask {
+  conn : Arc<ConnectionCore>,
+  shutdown_receiver : mpsc::Receiver<()>,
   remove_receiver : mpsc::Receiver<SubscriptionKey>,
-  subs : DenseSlotMap<SubscriptionKey, SubscriptionRecord>,
 }
 
 impl SubscriptionRecord {
@@ -377,53 +396,39 @@ impl SubscriptionRecord {
   }
 }
 
-impl NotificationProcessor {
-  async fn spawn(conn : &Arc<ConnectionCore>)
-                 -> Result<mpsc::Sender<SubscriptionRequest>> {
-    let conn = conn.clone();
-    let (add_sender, add_receiver) = mpsc::channel(5);
-    let (remove_sender, remove_receiver) = mpsc::channel(20);
-    let subs = DenseSlotMap::with_key();
-    // xxx need socket for notifications!
-    // xxx need to request notifications inband
-    let mut processor = NotificationProcessor {
-      add : add_receiver,
-      conn, remove_sender, remove_receiver, subs
-    };
-    task::spawn(async move {
-      processor.task().await.expect("gpio change notification task died");
-    });
-    Ok(add_sender)
-  }
+struct NotifySubs<'a> {
+  guard : MutexGuard< 'a, NotifyInCore>,
+}
 
-  async fn do_add(&mut self, req : SubscriptionRequest) -> Result<()> {
-    let (pin, wsender, dreceiver, expected_spec) = req;
-    let mut record = SubscriptionRecord {
-      client : wsender,
-      pin,
-      previously : None,
-      sequence : 0,
-    };
-    if let Some(expected) = expected_spec {
-      let actual = self.conn.gpio_read(pin).await?;
-      if expected != Some(actual) { record.notify(actual, None) }
-    };
-    let subk = self.subs.insert(record);
-    let mut tremove = self.remove_sender.clone();
-    task::spawn(async move {
-      dreceiver.await.unwrap_err();
-      tremove.send(subk).await.ok();
-    });
-    Ok(())
+impl<'a> Deref for NotifySubs<'a> {
+  type Target = NotifyShared;
+  fn deref(&self) -> &NotifyShared {
+    match self.guard.deref() {
+      NotifyInCore::Active(ref r) => r,
+      _ => panic!(),
+    }
+  }
+}
+impl<'a> DerefMut for NotifySubs<'a> {
+  fn deref_mut(&mut self) -> &mut NotifyShared {
+    match self.guard.deref_mut() {
+      NotifyInCore::Active(ref mut r) => r,
+      _ => panic!(),
+    }
+  }
+}
+
+impl NotifyInTask {
+  async fn lock_shared<'b, 'a : 'b>(&'a self) -> NotifySubs<'b> {
+    let guard = self.conn.notify.lock().await;
+    if guard.is_idle() { panic!(); }
+    NotifySubs { guard }
   }
 
   async fn task(&mut self) -> Result<()> {
     loop {
       tokio::select! {
-        adding = self.add.recv() => match adding {
-          Some(req) => self.do_add(req).await?,
-          None => return Ok(()),
-        },
+        _ = self.shutdown_receiver.recv() => return Ok(()),
 /* xxx
         () = thing.read => {
           let (seqno, tick, flags, levels) = thing;
@@ -441,37 +446,94 @@ impl NotificationProcessor {
           }
         }*/
         unsubk = self.remove_receiver.recv() => {
-          let _unsub = self.subs.remove(unsubk.unwrap()).unwrap();
-          // drop unusb
+          let mut shared = self.lock_shared().await;
+          shared.subs.remove(unsubk.unwrap()).unwrap();
+          let conn = self.conn.clone();
+          task::spawn(async move {
+            task::yield_now().await;
+            conn.notify_tell_pigpiod().await
+              .unwrap_or(() /* failed to deregister, ah well */);
+          });
         },
       }
     }
   }
 }
 
-impl Connection {                   
-  pub async fn notify_subscribe(&self, pin : Pin,
-                                expected_spec : Option<Option<Level>>)
+impl ConnectionCore {
+  async fn notify_tell_pigpiod_locked(&self, _shared : &mut NotifyShared)
+                                      -> Result<()> {
+    // xxx
+    Ok(())
+  }
+  async fn notify_tell_pigpiod(&self) -> Result<()> {
+    // xxx
+    Ok(())
+  }
+}
+
+impl Connection {
+  pub async fn notify_subscribe(&self, pin : Pin, read_initially : bool)
                                 -> Result<Subscription> {
     // Arranges to send GpioChange to Subscription
     // If expected_spec is not None, reads the gpio once at the start,
     // and sends a notification with no Tick if expected_spec is not
     // Some(Some(the current level)).
 
-    let mut notify_add = self.notify_add.lock().await;
-    if notify_add.is_none() {
-      *notify_add = Some(NotificationProcessor::spawn(&self.conn).await?);
+    let mut notify_locked = self.notify.lock().await;
+    if notify_locked.is_idle() {
+      let subs = DenseSlotMap::with_key();
+      let (remove_sender, remove_receiver) = mpsc::channel(20);
+      let active = NotifyInCore::Active(
+        NotifyShared { subs, remove_sender }
+      );
+      let was = replace(notify_locked.deref_mut(), active);
+      let shutdown_receiver = match was {
+        NotifyInCore::Idle { for_shutdown : r } => r,
+        _ => panic!(),
+      };
+      let conn = self.conn.clone();
+      // xxx need socket for notifications!
+
+      let mut processor =
+        NotifyInTask { conn, shutdown_receiver, remove_receiver, };
+      task::spawn(async move {
+        processor.task().await.expect("gpio change notification task died");
+      });
+    }
+    let shared = match *notify_locked {
+      NotifyInCore::Active(ref mut r) => r,
+      _ => panic!(),
+    };
+
+    let initial = GpioChange {
+      pin, level : None, tick : None, sequence : 0,
+    };
+    let (wsender, wreceiver) = watch::channel(initial);
+    let (dsender, dreceiver) = oneshot::channel();
+
+    let record = SubscriptionRecord {
+      pin,
+      client : wsender,
+      previously : None,
+      sequence : 0,
+    };
+
+    let subk = shared.subs.insert(record);
+    self.notify_tell_pigpiod_locked(shared).await?;
+
+    if read_initially {
+      let level = self.conn.gpio_read(pin).await?;
+      let record = &mut shared.subs[subk];
+      record.previously = Some((level as Word) << pin);
+      record.client.broadcast(GpioChange { level : Some(level), ..initial });
     }
 
-    // xxx do the gpio read here ?
-
-    let (wsender, wreceiver) = watch::channel(GpioChange {
-      pin, level : None, tick : None, sequence : 0,
+    let mut tremove = shared.remove_sender.clone();
+    task::spawn(async move {
+      dreceiver.await.unwrap_err();
+      tremove.send(subk).await.ok();
     });
-    let (dsender, dreceiver) = oneshot::channel();
-    notify_add.as_mut().unwrap()
-      .send(( pin, wsender, dreceiver, expected_spec ))
-      .await.expect("notify task died?");
 
     Ok(Subscription { wreceiver, _dsender : dsender })
   }
