@@ -7,6 +7,7 @@ use std::env;
 use thiserror::Error;
 
 use tokio::net::TcpStream;
+use std::net::SocketAddr;
 use tokio::sync::{Mutex,MutexGuard,mpsc,oneshot,watch};
 use tokio::task;
 use tokio::prelude::*;
@@ -37,6 +38,10 @@ pub enum Error {
   EnvNotUnicode(String),
   #[error("env var {0} value could not be parsed")]
   EnvInvalidSyntax(String),
+  #[error("failed to get address of pigpiod!")]
+  DaemonConnectionNoAddress,
+  #[error("failed to connect to pigpiod: {0:?}")]
+  DaemonConnectionFailed(Vec<(SocketAddr, tokio::io::Error)>),
   #[error("socket trouble communicating with pigpiod")]
   DaemonComms(#[from] tokio::io::Error),
   #[error("invalid Level value {0} (should be 0 or 1)")]
@@ -62,6 +67,7 @@ type Tick = Word;
 
 pub struct Connection {
   conn : Arc<ConnectionCore>,
+  addrs : Vec<SocketAddr>,
   _notify_shutdown_sender : mpsc::Sender<()>,
 }
 
@@ -165,18 +171,34 @@ fn default_addr() -> Result<String> {
   Ok(spec.unwrap().to_owned())
 }
 
+async fn connect_from_addrs(addrs : &Vec<SocketAddr>) -> Result<TcpStream> {
+  if addrs.len() == 0 { return Err(DaemonConnectionNoAddress) }
+  let mut errors = Vec::with_capacity(addrs.len());
+  for addr in addrs {
+    match TcpStream::connect(addr).await {
+      Ok(conn) => return Ok(conn),
+      Err(e) => errors.push((addr.clone(), e)),
+    }
+  }
+  Err(DaemonConnectionFailed(errors))
+}  
+
 impl Connection {
   pub async fn new_at<A : tokio::net::ToSocketAddrs>(addr : &A)
                       -> Result<Connection> {
-    let conn = TcpStream::connect(addr).await?;
-    Connection::new_from_socket(conn)
+    let addrs = tokio::net::lookup_host(addr).await?.collect();
+    Connection::new_from_addrs(addrs).await
   }
 
-  fn new_from_socket(conn : TcpStream) -> Result<Connection> {
+  async fn new_from_addrs(addrs : Vec<SocketAddr>) -> Result<Connection> {
+    let conn = connect_from_addrs(&addrs).await?;
     let (shutdown_sender, for_shutdown) = mpsc::channel(1);
     let notify = Mutex::new(NotifyInCore::Idle { for_shutdown });
     let core = Arc::new(ConnectionCore { conn : Mutex::new(conn), notify });
-    Ok(Connection { conn : core, _notify_shutdown_sender : shutdown_sender })
+    Ok(Connection {
+      conn : core, addrs,
+      _notify_shutdown_sender : shutdown_sender,
+    })
   }
 
   pub async fn new() -> Result<Connection> {
