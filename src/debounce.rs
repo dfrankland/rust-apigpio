@@ -16,25 +16,26 @@ impl DerefMut for Debounce {
 }
 
 impl Debounce {
-  pub fn new_filter(input : GpioReceiver, delays : [Tick ; 2]) -> Self {
+  pub fn new_filter(input : GpioReceiver,
+                    delays : [std::time::Duration ; 2]) -> Self {
     let (forward, output) = watch::channel(*input.borrow());
     task::spawn(async move {
-      let mut timeout = None;
+      let mut deferred : Option<(GpioChange, time::Delay)> = None;
       loop {
         tokio::select! {
-          _ = forward.closed() => {
-            break;
-          },
-          Some(ref update @ GpioChange { level : Some(level), .. })
-          = input.recv() => {
-            if update.level != forward.borrow().level() {
+          update = input.recv() => {
+            if let Some(to_defer @ GpioChange { level : Some(level), .. })
+              = update {
               let delay = delays[level as usize];
-              timeout = Some(time::delay_for(delay));
+              deferred = Some((to_defer, time::delay_for(delay)));
             }
           },
-          _ = timeout.unwrap(), if timeout.is_some() => {
-            timeout = None;
-            forward.send(*input.borrow);
+          _ = deferred.unwrap().1, if deferred.is_some() => {
+            forward.broadcast(deferred.unwrap().0);
+            deferred = None;
+          },
+          _ = forward.closed() => {
+            break;
           },
         };
       }
