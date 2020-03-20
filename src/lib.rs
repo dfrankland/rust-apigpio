@@ -367,12 +367,14 @@ pub struct GpioChange {
   sequence : Word, // increments by 1 each time; allows spotting lost events
 }
 
+type GpioReceiver = watch::Receiver<GpioChange>;
+
 pub struct Subscription {
-  wreceiver : watch::Receiver<GpioChange>,
+  wreceiver : GpioReceiver,
   _dsender : oneshot::Sender<()>, // exists to signal being dropped
 }
 impl Deref for Subscription {
-  type Target = watch::Receiver<GpioChange>;
+  type Target = GpioReceiver;
   fn deref(&self) -> &Self::Target { &self.wreceiver }
 }
 impl DerefMut for Subscription {
