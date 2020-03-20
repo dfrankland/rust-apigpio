@@ -63,7 +63,7 @@ use Error::*;
 
 pub type Result<T> = std::result::Result<T,Error>;
 
-type Tick = Word;
+type Tick = Word; // [us]
 
 pub struct Connection {
   conn : Arc<ConnectionCore>,
