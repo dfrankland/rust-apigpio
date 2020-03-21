@@ -20,14 +20,14 @@ impl Debounce {
                           delays : [std::time::Duration ; 2]) -> Self {
     let (forward, output) = watch::channel(*input.borrow());
     task::spawn(async move {
-      'recv: loop {
+      'await_recv: loop {
         let mut recvd = input.recv().await;
 
-        'pause: loop {
-          let proposed = if let Some(p) = recvd { p }
-            else { break 'recv; }; // producer went away!  tearing down?
-          let new_level = if let Some(l) = proposed.level { l }
-            else { continue 'recv; };
+        'just_recvd: loop {
+          if recvd.is_none() { break 'await_recv; }; // tearing down?
+          let proposed = recvd.unwrap();
+          if proposed.level.is_none() { continue 'await_recv; } // startup
+          let new_level = proposed.level.unwrap();
 
           let delay = delays[new_level as usize];
           let timeout = Some(time::delay_for(delay));
@@ -35,16 +35,16 @@ impl Debounce {
           tokio::select! {
             update = input.recv() => {
               recvd = update;
-              continue 'pause;
+              continue 'just_recvd;
             }
             _ = timeout.unwrap() => {
               let r = forward.broadcast(proposed);
-              if r.is_err() { break 'recv; }
-              continue 'recv;
+              if r.is_err() { break 'await_recv; }
+              continue 'await_recv;
             }
           }
-        } // 'pause loop
-      } // 'recv loop
+        } // 'just_recvd loop
+      } // 'await_recv loop
     });
     Debounce { output }
   }
