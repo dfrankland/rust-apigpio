@@ -16,29 +16,35 @@ impl DerefMut for Debounce {
 }
 
 impl Debounce {
-  pub fn new_filter(mut input : GpioReceiver,
-                    delays : [std::time::Duration ; 2]) -> Self {
-    let (mut forward, output) = watch::channel(*input.borrow());
+  pub async fn new_filter(mut input : GpioReceiver,
+                          delays : [std::time::Duration ; 2]) -> Self {
+    let (forward, output) = watch::channel(*input.borrow());
     task::spawn(async move {
-      let mut deferred : Option<(GpioChange, time::Delay)> = None;
-      loop {
-        tokio::select! {
-          update = input.recv() => {
-            if let Some(GpioChange { level : Some(level), .. })
-              = update {
-              let delay = delays[level as usize];
-              deferred = Some((update.unwrap(), time::delay_for(delay)));
+      'recv: loop {
+        let mut recvd = input.recv().await;
+
+        'pause: loop {
+          let proposed = if let Some(p) = recvd { p }
+            else { break 'recv; }; // producer went away!  tearing down?
+          let new_level = if let Some(l) = proposed.level { l }
+            else { continue 'recv; };
+
+          let delay = delays[new_level as usize];
+          let timeout = Some(time::delay_for(delay));
+
+          tokio::select! {
+            update = input.recv() => {
+              recvd = update;
+              continue 'pause;
             }
-          },
-          _ = deferred.unwrap().1, if deferred.is_some() => {
-            forward.broadcast(deferred.unwrap().0);
-            deferred = None;
-          },
-          _ = forward.closed() => {
-            break;
-          },
-        };
-      }
+            _ = timeout.unwrap() => {
+              let r = forward.broadcast(proposed);
+              if r.is_err() { break 'recv; }
+              continue 'recv;
+            }
+          }
+        } // 'pause loop
+      } // 'recv loop
     });
     Debounce { output }
   }
