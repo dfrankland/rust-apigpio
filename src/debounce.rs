@@ -24,7 +24,7 @@ impl Debounce {
         let mut recvd = input.recv().await;
 
         'just_recvd: loop {
-          if recvd.is_none() { break 'await_recv; }; // tearing down?
+          if recvd.is_none() { break 'await_recv; } // tearing down
           let proposed = recvd.unwrap();
           if proposed.level.is_none() { continue 'await_recv; } // startup
           let new_level = proposed.level.unwrap();
@@ -39,7 +39,7 @@ impl Debounce {
             }
             _ = timeout.unwrap() => {
               let r = forward.broadcast(proposed);
-              if r.is_err() { break 'await_recv; }
+              if r.is_err() { break 'await_recv; } // receivers gone
               continue 'await_recv;
             }
           }
