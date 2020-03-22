@@ -342,6 +342,15 @@ impl ConnectionCore {
     }
     self.cmd_raw(PI_CMD_WVAG, 0,0, extra.len() as Word, &extra).await
   }
+  pub async fn wave_get_micros(&self) -> Result<Word> {
+    self.cmdr(PI_CMD_WVSM, 0, 0).await
+  }
+  pub async fn wave_get_high_micros(&self) -> Result<Word> {
+    self.cmdr(PI_CMD_WVSM, 1, 0).await
+  }
+  pub async fn wave_get_max_micros(&self) -> Result<Word> {
+    self.cmdr(PI_CMD_WVSM, 2, 0).await
+  }
 
   pub async unsafe fn wave_send_using_mode(&self, wave: WaveId, txmode : Word)
                                            -> Result<Word> {
