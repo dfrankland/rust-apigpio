@@ -67,6 +67,7 @@ pub type Result<T> = std::result::Result<T,Error>;
 
 type Tick = Word; // [us]
 
+#[derive(Clone)]
 pub struct Connection {
   conn : Arc<ConnectionCore>,
   addrs : Vec<SocketAddr>,
