@@ -115,6 +115,7 @@ impl fmt::Display for WaveId {
   }
 }
 
+#[derive(Clone,Copy,Debug)]
 pub struct Pulse {
   pub on_mask:  Word,
   pub off_mask: Word,
