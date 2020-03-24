@@ -374,10 +374,10 @@ impl ConnectionCore {
 
 #[derive(Debug,PartialEq,Eq,Copy,Clone)]
 pub struct GpioChange {
-  pin : Pin,
-  level : Option<Level>, // None only before gpio has been read
-  tick : Option<Tick>, // None for the initial notification
-  sequence : Word, // increments by 1 each time; allows spotting lost events
+  pub pin : Pin,
+  pub level : Option<Level>, // None only before gpio has been read
+  pub tick : Option<Tick>, // None for the initial notification
+  pub sequence : Word, // increments by 1 each time; allows spotting lost events
 }
 
 type GpioReceiver = watch::Receiver<GpioChange>;
