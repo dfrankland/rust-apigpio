@@ -102,6 +102,11 @@ pub enum Level {
   H = 1,
 }
 
+impl std::ops::Not for Level {
+  type Output = Level;
+  fn not(self) -> Self { match self { H => L, L => H, } }
+}
+
 pub type Pin = Word;
 
 #[derive(Debug,PartialEq,Eq,Copy,Clone)]
