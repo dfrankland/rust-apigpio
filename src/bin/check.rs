@@ -1,9 +1,6 @@
 
 use apigpio::*;
 
-use tokio::time::Duration;
-use debounce::*;
-
 #[tokio::main]
 async fn main() {
   let mut args = std::env::args();
@@ -16,13 +13,9 @@ async fn main() {
   let mut sub = conn.notify_subscribe(pin, true, false)
     .await.expect("subscribe");
 
-  let delays = Box::new(|_level| Duration::from_millis(20));
-  let mut deb = Debounce::new_filter(sub.clone(), delays).await;
-
   loop {
     tokio::select! {
       trans = sub.recv() => println!("{:?}", trans.expect("event")),
-      trans = deb.recv() => println!("{:?}", trans.expect("debou")),
     }
   }
 }

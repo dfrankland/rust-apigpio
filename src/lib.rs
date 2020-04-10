@@ -26,8 +26,6 @@ use slotmap::{DenseSlotMap};
 
 use std::{result,fmt};
 
-pub mod debounce;
-
 pub type Word = u32;
 
 pub type MessageBuf = [u8;16];
