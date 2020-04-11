@@ -2,6 +2,8 @@
 mod constants;
 use constants::*;
 
+mod trackbuf;
+
 use std::env;
 
 use thiserror::Error;
