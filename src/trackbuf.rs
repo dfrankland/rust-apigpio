@@ -19,29 +19,24 @@ type Result<T> = tokio::io::Result<T>;
 
 trait Outputter {
   type BufObj;
-  fn done(&self) -> bool;
-  fn got(&mut self, count : usize);
-  fn buf<'a>(&'a mut self, bo : &'a mut Self::BufObj) -> &'a mut [u8];
+  fn buf<'a>(&'a mut self, expected : usize,
+             bo : &'a mut Self::BufObj) -> &'a mut [u8];
   fn bufobj(&self) -> Self::BufObj;
 }
 
-impl Outputter for (usize, &mut [u8]) {
+impl Outputter for &mut [u8] {
   type BufObj = ();
-  fn done(&self) -> bool { self.0 >= self.1.len() }
-  fn buf<'a>(&'a mut self, _bo : &'a mut Self::BufObj) -> &'a mut [u8] {
-    self.1.split_at_mut(self.0).1
-  }
-  fn got(&mut self, count : usize) {
-    self.0 += count
+  fn buf<'a>(&'a mut self, remaining : usize,
+             _bo : &'a mut Self::BufObj) -> &'a mut [u8] {
+    self.split_at_mut( self.len() - remaining ).1
   }
   fn bufobj(&self) -> Self::BufObj { Default::default() }
 }
 
-impl Outputter for usize {
+impl Outputter for () {
   type BufObj = [u8;20];
-  fn done(&self) -> bool { *self == 0 }
-  fn buf<'a>(&'a mut self, bo : &'a mut Self::BufObj) -> &'a mut [u8] { bo }
-  fn got(&mut self, count : usize) { *self -= count }
+  fn buf<'a>(&'a mut self, _remaining : usize,
+             bo : &'a mut Self::BufObj) -> &'a mut [u8] { bo }
   fn bufobj(&self) -> Self::BufObj { Default::default() }
 }
 
@@ -54,14 +49,17 @@ impl<RW : AsyncWrite + AsyncWrite + AsyncRead + Unpin> Communicator<RW> {
     }
   }
 
-  pub async fn communicate(&mut self, cmdvec : &[&[u8]], response : &mut [u8])
+  pub async fn communicate(&mut self, cmdvec : &[&[u8]],
+                           mut response : &mut [u8])
                            -> Result<()> {
     self.drain_write_buffer().await?;
     self.ignore_stale_responses().await?;
     self.assert_idle();
     for &cmd in cmdvec { self.write_buffer.extend(cmd); }
     self.read_expected = response.len();
-    read_into(&mut self.connection, &mut (0, response)).await?;
+    self.drain_write_buffer().await?;
+    read_into(&mut self.connection, &mut self.read_expected,
+              &mut response).await?;
     self.assert_idle();
     Ok(())
   }
@@ -78,7 +76,7 @@ impl<RW : AsyncWrite + AsyncWrite + AsyncRead + Unpin> Communicator<RW> {
 
   async fn drain_write_buffer(&mut self) -> Result<()> {
     loop {
-      if self.write_buffer.len() == 0 { break Ok(()) }
+      if self.write_buffer.len() == 0 { break }
       future::poll_fn(|cx|{
         let (slice1, slice2) = self.write_buffer.as_slices();
         let slice = if slice1.is_empty() { slice2 } else { slice1 };
@@ -93,25 +91,26 @@ impl<RW : AsyncWrite + AsyncWrite + AsyncRead + Unpin> Communicator<RW> {
         }
       }).await?;
     }
+    Ok(())
   }
 
   async fn ignore_stale_responses(&mut self) -> Result<()> {
-    read_into(&mut self.connection, &mut self.read_expected).await
+    read_into(&mut self.connection, &mut self.read_expected, &mut ()).await
   }
 }
 
 //impl<RW : AsyncWrite + AsyncRead, O : Outputter> Communicator<RW> {
 //  async fn read_into(&mut self, o : &mut O) -> Result<()> {
 async fn read_into<RW : AsyncWrite + AsyncRead, O : Outputter>
-  (c : &mut Pin<Box<RW>>, o : &mut O) -> Result<()> {
+  (c : &mut Pin<Box<RW>>, remaining : &mut usize, o : &mut O) -> Result<()> {
     let mut bo = o.bufobj();
     loop {
-      if o.done() { break }
+      if *remaining == 0 { break }
       future::poll_fn(|cx|{
-        let got = c.as_mut().poll_read(cx, o.buf(&mut bo));
+        let got = c.as_mut().poll_read(cx, o.buf(*remaining, &mut bo));
         match got {
           Ready(Ok(n)) => {
-            o.got(n);
+            *remaining -= n;
             Ready(<Result<()>>::Ok(()))
           },
           Ready(Err(e)) => Err(e)?,
