@@ -28,6 +28,8 @@ use slotmap::{DenseSlotMap};
 
 use std::{result,fmt};
 
+use trackbuf::Communicator;
+
 pub type Word = u32;
 
 pub type MessageBuf = [u8;16];
@@ -75,7 +77,7 @@ pub struct Connection {
 }
 
 pub struct ConnectionCore {
-  conn : Mutex<TcpStream>,
+  conn : Mutex<Communicator<TcpStream>>,
   notify : Mutex<NotifyInCore>,
 }
 
@@ -205,7 +207,8 @@ impl Connection {
     let conn = connect_from_addrs(&addrs).await?;
     let (shutdown_sender, for_shutdown) = mpsc::channel(1);
     let notify = Mutex::new(NotifyInCore::Idle { for_shutdown });
-    let core = Arc::new(ConnectionCore { conn : Mutex::new(conn), notify });
+    let comm = Communicator::new(conn);
+    let core = Arc::new(ConnectionCore { conn : Mutex::new(comm), notify });
     Ok(Connection {
       conn : core, addrs,
       _notify_shutdown_sender : shutdown_sender,
@@ -224,7 +227,7 @@ impl Deref for Connection {
   fn deref(&self) -> &Self::Target { &self.conn }
 }
 
-async fn cmd_raw(conn : &mut TcpStream,
+async fn cmd_raw(conn : &mut Communicator<TcpStream>,
                  cmd : Word, p1 : Word, p2 : Word, p3 : Word,
                  extra : &[u8])
                  -> Result<Word> {
@@ -240,10 +243,8 @@ async fn cmd_raw(conn : &mut TcpStream,
     f(p2);
     f(p3);
   }
-  conn.write_all(&cmsg).await?;
-  conn.write_all(extra).await?;
   let mut rmsg = [0u8; 16];
-  conn.read_exact(&mut rmsg).await?;
+  conn.communicate(&[&cmsg,extra], &mut rmsg).await?;
   if rmsg[0..12] != cmsg[0..12] {
     return Err(ProtocolReplyMismatch(Box::new((cmsg,rmsg))))
   }
@@ -542,8 +543,10 @@ impl Connection {
 
     let mut notify_locked = self.notify.lock().await;
     if notify_locked.is_idle() {
-      let mut stream = connect_from_addrs(&self.addrs).await?;
-      let nhandle = cmd_raw(&mut stream, PI_CMD_NOIB,0,0,0, &[0;0]).await?;
+      let stream = connect_from_addrs(&self.addrs).await?;
+      let mut comm = Communicator::new(stream);
+      let nhandle = cmd_raw(&mut comm, PI_CMD_NOIB,0,0,0, &[0;0]).await?;
+      let stream = comm.into_inner();
 
       let subs = DenseSlotMap::with_key();
       let (remove_sender, remove_receiver) = mpsc::channel(20);

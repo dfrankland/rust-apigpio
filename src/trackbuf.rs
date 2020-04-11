@@ -66,7 +66,12 @@ impl<RW : AsyncWrite + AsyncWrite + AsyncRead + Unpin> Communicator<RW> {
     Ok(())
   }
 
-  fn assert_idle(&mut self) {
+  pub fn into_inner(self) -> RW {
+    self.assert_idle();
+    *Pin::into_inner(self.connection)
+  }
+
+  fn assert_idle(&self) {
     assert!(self.write_buffer.is_empty());
     assert!(self.read_expected == 0);
   }
