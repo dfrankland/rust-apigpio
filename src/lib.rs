@@ -2,7 +2,7 @@
 mod constants;
 use constants::*;
 
-mod trackbuf;
+pub mod trackbuf;
 
 use std::env;
 
