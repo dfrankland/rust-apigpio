@@ -1,5 +1,5 @@
 
-mod constants;
+pub mod constants;
 use constants::*;
 
 pub mod trackbuf;
@@ -36,7 +36,7 @@ pub type MessageBuf = [u8;16];
 
 #[derive(Error,Debug)]
 pub enum Error {
-  #[error("pigpiod reported error")]
+  #[error("pigpiod reported error {0}")]
   Pi(i32),
   #[error("env var {0} contains non-unicode data")]
   EnvNotUnicode(String),
