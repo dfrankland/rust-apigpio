@@ -4,6 +4,10 @@ use std::task::Poll::*;
 //use std::io::BufRead;
 use std::pin::Pin;
 use std::default::Default;
+use std::fmt::{self,Display,Formatter};
+use std::result;
+
+use thiserror::Error;
 
 use futures_util::future;
 
@@ -16,6 +20,14 @@ pub struct Communicator<RW : AsyncWrite + AsyncRead> {
 }
 
 type Result<T> = tokio::io::Result<T>;
+
+#[derive(Error,Debug)]
+struct PeerDisconnected { }
+impl Display for PeerDisconnected {
+  fn fmt(&self, fmt: &mut Formatter) -> result::Result<(), fmt::Error> {
+    write!(fmt,"PeerDisconnected")
+  }
+}
 
 trait Outputter {
   type BufObj;
@@ -109,6 +121,13 @@ async fn read_into<RW : AsyncWrite + AsyncRead, O : Outputter>
       future::poll_fn(|cx|{
         let got = c.as_mut().poll_read(cx, o.buf(*remaining, &mut bo));
         match got {
+          Ready(Ok(0)) => {
+            Ready(Err(
+              tokio::io::Error::new(
+                tokio::io::ErrorKind::UnexpectedEof, PeerDisconnected{}
+              )
+            ))
+          },
           Ready(Ok(n)) => {
             *remaining -= n;
             Ready(<Result<()>>::Ok(()))

@@ -468,7 +468,8 @@ impl NotifyInTask {
         _ = self.shutdown_receiver.recv() => {
           return Ok(());
         },
-        _ = self.stream.read_exact(&mut reportbuf) => {
+        r = self.stream.read_exact(&mut reportbuf) => {
+          r?;
           let tick   = u32::from_le_bytes(*array_ref![reportbuf,4,4]);
           let levels = u32::from_le_bytes(*array_ref![reportbuf,8,4]);
           let mut shared = self.conn.lock_notify_shared().await;
