@@ -286,7 +286,7 @@ impl ConnectionCore {
       Some(L) => PI_PUD_DOWN,
       Some(H) => PI_PUD_UP,
     };
-    self.cmd0(PI_CMD_MODES, pin, mode).await
+    self.cmd0(PI_CMD_PUD, pin, mode).await
   }
   pub async fn gpio_read(&self, pin : Pin) -> Result<Level> {
     let level = self.cmdr(PI_CMD_READ, pin, 0).await?;
