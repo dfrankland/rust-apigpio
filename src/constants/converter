@@ -6,6 +6,7 @@ use Carp;
 
 print <<END;
 #![allow(dead_code)]
+#![allow(unused_parens)]
 END
 
 our $def_s = '';
