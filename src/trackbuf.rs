@@ -1,3 +1,8 @@
+// Copyright 2020 Ian Jackson
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// There is NO WARRANTY.
+
+/// Unfortunately, this module is not yet properly documented.
 
 use std::collections::vec_deque::VecDeque;
 use std::task::Poll::*;
