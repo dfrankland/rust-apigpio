@@ -2,83 +2,84 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // There is NO WARRANTY.
 
-/// Raspberry PI GPIO access library based on pigpiod.
-///
-/// This library a pure-Rust analogue to the C `pigpio_if2` library,
-/// providing an async interface to talk to pigpiod and based on
-/// Tokio.
-///
-/// = Consider `rppal` instead! =
-///
-/// You should consider whether you wish to use this library, or
-/// instead use the excellent `rppal` library.
-///
-/// Advantages of `apigpo`:
-///
-///  * Access to pigpiod's DMA-based wavefile generation.
-///
-///  * Interface is very similar to pigpio's own interface: eases
-///    porting code to Rust, and reusing online information based
-///    on C or Python pigpio access.
-///
-///  * You can port-forward your pigpiod to a faster or more
-///    convenient computer, and run your program there (during
-///    development, for example).
-///
-///  * Correct, race-free, operation when multiple processes are
-///    changing *modes* of GPIO pins concurrently, provided everything
-///    is using pigpiod.  (Changing GPIO *levels* is find with `rppal`
-///    and other access libraries too.)
-///
-/// Advantages of `rppal`:
-///
-///  * I2C, PWM, SPI, UART support.  RPI model information, etc.
-///
-///  * Much more Rust-ish interface, with better type safety etc.
-///    For example, you can't forget to set the gpio pin mode.
-///
-///  * Less overhead because GPIO access is done directly within
-///    your Rust program without any syscalls, rather than by
-///    talking to a separate daemon.
-///
-///  * GPIO change notification based on interrupts rather than
-///    pigpiod's polling.
-///
-///  * No need to deal with async Rust.
-///
-///  * No need to arrange for a daemon to be running, make sure
-///    your embedded OS's startup order is correct, etc.
-///
-/// It is possible to use both libraries in a single project,
-/// but see the following note:
-///
-/// = Concurrent setting of RPI GPIO PIN modes =
-///
-/// The Broadcom SOC provides a way to raise, or lower, individual
-/// GPIO pin outputs (or sets of outputs) in a way that does not
-/// interfere with other similar operations performed concurrently.
-///
-/// However, this interface is only provided for setting the *level*
-/// of an output pin.  For modes, pullup/pulldown, etc., there are
-/// only registers containing information about multiple pins where
-/// changes are made by reading the register, adjusting the bits which
-/// control a particular pin, and writing the information back.
-///
-/// If multiple tasks on the rpi do this at once, they can
-/// accidentally undo each others' changes.
-///
-/// For this purpose, pigpiod is a single task: it will serialise the
-/// updates itself.  So if all your programs use pigpiod (via apigpio,
-/// or via another programming language which talks to pigpiod) you
-/// are fine.
-///
-/// If you want to mix and match, the easiest way to ensure
-/// correctness is to have a single task at startup set all the gpio
-/// modes as you want them.  Then all subsequent updates will be
-/// harmless no-ops.
-///
-/// Another easy way to avoid this problem is to have only a single
-/// process using, say, `rppal`.
+//! # Summary - Raspberry PI GPIO access library based on pigpiod.
+//!
+//! This library a pure-Rust analogue to the C `pigpio_if2` library,
+//! providing an async interface to talk to pigpiod and based on
+//! Tokio.
+//!
+//! # Consider `rppal` instead!
+//!
+//! You should consider whether you wish to use this library, or
+//! instead use the excellent `rppal` library.
+//!
+//! Advantages of `apigpo`:
+//!
+//!  * Access to pigpiod's DMA-based wavefile generation.
+//!
+//!  * Interface is very similar to pigpio's own interface: this could
+//!    ease porting existing rpi code to Rust, and may make it easier
+//!    to make use of existing online information based on C or Python
+//!    pigpio access.
+//!
+//!  * You can port-forward your pigpiod to a faster or more
+//!    convenient computer, and run your program there (during
+//!    development, for example).
+//!
+//!  * Correct, race-free, operation when multiple processes are
+//!    changing *modes* of GPIO pins concurrently, provided everything
+//!    is using pigpiod.  (Concurrent multiprocess changes to GPIO
+//!    *levels* are fine with any library, including `rppal`.)
+//!
+//! Advantages of `rppal`:
+//!
+//!  * I2C, PWM, SPI, UART support.  RPI model information, etc.
+//!
+//!  * Much more Rust-ish interface, with better type safety etc.
+//!    For example, you can't forget to set the gpio pin mode.
+//!
+//!  * Less overhead because GPIO access is done directly within
+//!    your Rust program without any syscalls, rather than by
+//!    talking to a separate daemon.
+//!
+//!  * GPIO change notification based on interrupts rather than
+//!    pigpiod's polling.
+//!
+//!  * No need to deal with async Rust.
+//!
+//!  * No need to arrange for a daemon to be running, make sure
+//!    your embedded OS's startup order is correct, etc.
+//!
+//! It is possible to use both libraries in a single project,
+//! but see the following note:
+//!
+//! # Concurrent setting of RPI GPIO PIN modes
+//!
+//! The Broadcom SOC provides a way to raise, or lower, individual
+//! GPIO pin outputs (or sets of outputs) in a way that does not
+//! interfere with other similar operations performed concurrently.
+//!
+//! However, this interface is only provided for setting the *level*
+//! of an output pin.  For modes, pullup/pulldown, etc., there are
+//! only registers containing information about multiple pins where
+//! changes are made by reading the register, adjusting the bits which
+//! control a particular pin, and writing the information back.
+//!
+//! If multiple tasks on the rpi do this at once, they can
+//! accidentally undo each others' changes.
+//!
+//! For this purpose, pigpiod is a single task: it will serialise the
+//! updates itself.  So if all your programs use pigpiod (via apigpio,
+//! or via another programming language which talks to pigpiod) you
+//! are fine.
+//!
+//! If you want to mix and match, the easiest way to ensure
+//! correctness is to have a single task at startup set all the gpio
+//! modes as you want them.  Then all subsequent updates will be
+//! harmless no-ops.
+//!
+//! Another easy way to avoid this problem is to have only a single
+//! process using, say, `rppal`.
 
 pub mod constants;
 use constants::*;
