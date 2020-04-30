@@ -11,6 +11,8 @@
 
 #![allow(dead_code)]
 #![allow(unused_parens)]
+
+//! Constants from C pigpio.h, converted into Rust `const`s.
 /* BSC FIFO size */
 /* gpio: 0-53 */
 pub const PI_MIN_GPIO : u32 = 0;

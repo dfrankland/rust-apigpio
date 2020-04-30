@@ -21,6 +21,8 @@ print <<END;
 
 #![allow(dead_code)]
 #![allow(unused_parens)]
+
+//! Constants from C pigpio.h, converted into Rust `const`s.
 END
 
 our $def_s = '';
