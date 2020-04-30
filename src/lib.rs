@@ -116,7 +116,6 @@ impl std::ops::Not for Level {
 
 pub type Pin = Word;
 
-#[derive(Debug,PartialEq,Eq,Copy,Clone)]
 pub struct WaveId (pub Word);
 
 const TICK_KEEPALIVE_US : Word = 60000000;
