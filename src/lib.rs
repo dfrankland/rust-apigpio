@@ -405,7 +405,7 @@ impl DerefMut for Subscription {
 }
 
 #[derive(Debug)]
-pub struct SubscriptionRecord {
+struct SubscriptionRecord {
   pin : Pin,
   client : watch::Sender<GpioChange>,
   previously : Option<Word>, // None means sender not ever notified yet
