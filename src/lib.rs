@@ -2,7 +2,83 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // There is NO WARRANTY.
 
-/// Unfortunately, this library is not yet properly documented.
+/// Raspberry PI GPIO access library based on pigpiod.
+///
+/// This library a pure-Rust analogue to the C `pigpio_if2` library,
+/// providing an async interface to talk to pigpiod and based on
+/// Tokio.
+///
+/// = Consider `rppal` instead! =
+///
+/// You should consider whether you wish to use this library, or
+/// instead use the excellent `rppal` library.
+///
+/// Advantages of `apigpo`:
+///
+///  * Access to pigpiod's DMA-based wavefile generation.
+///
+///  * Interface is very similar to pigpio's own interface: eases
+///    porting code to Rust, and reusing online information based
+///    on C or Python pigpio access.
+///
+///  * You can port-forward your pigpiod to a faster or more
+///    convenient computer, and run your program there (during
+///    development, for example).
+///
+///  * Correct, race-free, operation when multiple processes are
+///    changing *modes* of GPIO pins concurrently, provided everything
+///    is using pigpiod.  (Changing GPIO *levels* is find with `rppal`
+///    and other access libraries too.)
+///
+/// Advantages of `rppal`:
+///
+///  * I2C, PWM, SPI, UART support.  RPI model information, etc.
+///
+///  * Much more Rust-ish interface, with better type safety etc.
+///    For example, you can't forget to set the gpio pin mode.
+///
+///  * Less overhead because GPIO access is done directly within
+///    your Rust program without any syscalls, rather than by
+///    talking to a separate daemon.
+///
+///  * GPIO change notification based on interrupts rather than
+///    pigpiod's polling.
+///
+///  * No need to deal with async Rust.
+///
+///  * No need to arrange for a daemon to be running, make sure
+///    your embedded OS's startup order is correct, etc.
+///
+/// It is possible to use both libraries in a single project,
+/// but see the following note:
+///
+/// = Concurrent setting of RPI GPIO PIN modes =
+///
+/// The Broadcom SOC provides a way to raise, or lower, individual
+/// GPIO pin outputs (or sets of outputs) in a way that does not
+/// interfere with other similar operations performed concurrently.
+///
+/// However, this interface is only provided for setting the *level*
+/// of an output pin.  For modes, pullup/pulldown, etc., there are
+/// only registers containing information about multiple pins where
+/// changes are made by reading the register, adjusting the bits which
+/// control a particular pin, and writing the information back.
+///
+/// If multiple tasks on the rpi do this at once, they can
+/// accidentally undo each others' changes.
+///
+/// For this purpose, pigpiod is a single task: it will serialise the
+/// updates itself.  So if all your programs use pigpiod (via apigpio,
+/// or via another programming language which talks to pigpiod) you
+/// are fine.
+///
+/// If you want to mix and match, the easiest way to ensure
+/// correctness is to have a single task at startup set all the gpio
+/// modes as you want them.  Then all subsequent updates will be
+/// harmless no-ops.
+///
+/// Another easy way to avoid this problem is to have only a single
+/// process using, say, `rppal`.
 
 pub mod constants;
 use constants::*;
@@ -35,12 +111,17 @@ use std::{result,fmt};
 
 use trackbuf::Communicator;
 
+/// pigpiod likes to think about most things as 32-bit words.
 pub type Word = u32;
 
+/// Used only for reporting an unexpected reply from pigpiod.
 pub type MessageBuf = [u8;16];
 
 #[derive(Error,Debug)]
 pub enum Error {
+  /// This is not an enum because if pigpiod is newer than apigpio,
+  /// pigpiod might send error codes that apigpio does not understand.
+  /// Specific error values can be checked 
   #[error("pigpiod reported error {0}")]
   Pi(i32),
   #[error("env var {0} contains non-unicode data")]
@@ -72,8 +153,13 @@ use Error::*;
 
 pub type Result<T> = std::result::Result<T,Error>;
 
-type Tick = Word; // [us]
+/// For documentation purposes, where a word is a pigpio tick
+/// we use this type.
+pub type Tick = Word; // [us]
 
+/// The main struct which owns a connection to pigpiod.
+/// Most of the methods are provided by `ConnectionCore`
+/// for internal reasons.
 #[derive(Clone)]
 pub struct Connection {
   conn : Arc<ConnectionCore>,
@@ -81,15 +167,24 @@ pub struct Connection {
   _notify_shutdown_sender : mpsc::Sender<()>,
 }
 
+/// Most of the Connection methods are actually provided here.
+/// Mostly, methods are named after the functions in `pigpiod_if2`
+/// http://abyz.me.uk/rpi/pigpio/pdif2.html and perform the same
+/// function; often they are only documented here in `agpipio` if
+/// there is anything unusual to note.
 pub struct ConnectionCore {
   conn : Mutex<Communicator<TcpStream>>,
   notify : Mutex<NotifyInCore>,
 }
 
-const PI_ENVPORT : &str = "PIGPIO_PORT";
-const PI_ENVADDR : &str = "PIGPIO_ADDR";
-const PI_DEFAULT_SOCKET_PORT : u16 = 8888;
-const PI_DEFAULT_SOCKET_ADDR : &str = "localhost";
+/// Env var name to override pigpiod port to connect to.
+pub const PI_ENVPORT : &str = "PIGPIO_PORT";
+/// Env var name to override pigpiod address to connect to.
+pub const PI_ENVADDR : &str = "PIGPIO_ADDR";
+/// Default pigpiod port.
+pub const PI_DEFAULT_SOCKET_PORT : u16 = 8888;
+/// Default pigpiod address.
+pub const PI_DEFAULT_SOCKET_ADDR : &str = "localhost";
 
 #[derive(Debug,FromPrimitive,Display,PartialEq,Eq,Copy,Clone)]
 pub enum GpioMode {
@@ -114,11 +209,20 @@ impl std::ops::Not for Level {
   fn not(self) -> Self { match self { H => L, L => H, } }
 }
 
+/// For documentation purposes, where a word is a GPIP pin number
+/// we use this type.  These are always BCM GPIO pin numbers.
 pub type Pin = Word;
 
+/// Refers to a Wave stored in pigpiod.  See the pigpio wave
+/// documentaton.  In pigpiod Wave IDs are global across all pigpio
+/// clients, and waves not cleared (nor transmission stopped!) when a
+/// client disconnects.  So the inner Word is available in case you
+/// need to do something exciting and cross-process.
+#[derive(Debug,PartialEq,Eq,Copy,Clone,Ord,PartialOrd,Hash)]
 pub struct WaveId (pub Word);
 
-const TICK_KEEPALIVE_US : Word = 60000000;
+/// Keepalive interval for `notify_subscribe` `tick_keepalives`
+pub const TICK_KEEPALIVE_US : Word = 60000000;
 
 impl fmt::Display for WaveId {
   fn fmt(&self, fmt : &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
@@ -126,6 +230,7 @@ impl fmt::Display for WaveId {
   }
 }
 
+/// Represents a waveform element.  See pigpio docs.
 #[derive(Clone,Copy,Debug)]
 pub struct Pulse {
   pub on_mask:  Word,
@@ -156,12 +261,15 @@ level_try_from!{u16}
 level_try_from!{u8}
 
 impl Level {
+  /// Short convenient name for converting into a Level.
   pub fn u(u : usize) -> Level {
     TryFrom::try_from(u).unwrap_or_else(|_| panic!("Level::u({})",u))
   }
+  /// Short convenient name for converting from a Level.
   pub fn b(b : bool) -> Level { Level::u(b as usize) }
 }
 
+/// Specifies whether there should be a weak pullup or pulldown.
 pub type PullUpDown = Option<Level>;
 
 fn env_var(varname : &str) -> Result<Option<String>> {
@@ -201,6 +309,7 @@ async fn connect_from_addrs(addrs : &Vec<SocketAddr>) -> Result<TcpStream> {
 }  
 
 impl Connection {
+  /// Connects to pigpiod, given specific socket address details.
   pub async fn new_at<A : tokio::net::ToSocketAddrs>(addr : &A)
                       -> Result<Connection> {
     let addrs = tokio::net::lookup_host(addr).await?.collect();
@@ -219,6 +328,7 @@ impl Connection {
     })
   }
 
+  /// Connects to pigpiod using default address.
   pub async fn new() -> Result<Connection> {
     let addr = default_addr()?;
     let sockaddr = (addr.as_ref(), default_port()?);
@@ -306,18 +416,22 @@ impl ConnectionCore {
   pub async fn wave_add_new(&self) -> Result<WaveId> {
     Ok(WaveId( self.cmdr(PI_CMD_WVNEW, 0,0).await? ))
   }
+  /// Caller is responsible for not calling wave_* functions for
+  /// multiple purposes concurrently - ie, for enforcing the
+  /// concurrency control implied by pigpiod's interface.
+  ///
+  /// Getting this wrong is not a memory safety concern (hence the
+  /// lack of unsafe) but would cause wrong behaviours.
+  ///
+  /// Note that this applies even across multiple different pigpiod
+  /// clients.
   pub async fn wave_create(&self) -> Result<WaveId> {
-    // Caller is responsible for not calling wave_* functions for
-    // multiple purposes concurrently - ie, for enforcing the
-    // concurrency control implied by pigpiod's interface.
-    //
-    // Getting this wrong is not a memory safety concern (hence the
-    // lack of unsafe) but would cause wrong behaviours.
     Ok(WaveId( self.cmdr(PI_CMD_WVCRE, 0,0).await? ))
   }
+  /// This is safe if no-one in the whole system ever calls
+  /// `wave_send_using_mode` with mode `*SYNC*`.  See the pigpio
+  /// documentation on `wave_send_using_mode` full details.
   pub async unsafe fn wave_delete(&self, wave : WaveId) -> Result<()> {
-    // This is safe if no-one in the whole system ever calls
-    // wave_send_using_mode with mode *SYNC*.
     self.cmd0(PI_CMD_WVDEL, wave.0, 0).await
   }
 
@@ -364,34 +478,52 @@ impl ConnectionCore {
     self.cmdr(PI_CMD_WVSM, 2, 0).await
   }
 
+  /// Caller must ensure that if txmode is `*SYNC*` the "bad things"
+  /// described in the pigpio docs do not happen.
+  ///
+  /// If *any* calls to this function use `*SYNC*`, then `wave_delete`
+  /// is potentially unsafe and all calls to it must be checked.
+  ///
+  /// Note that because everything is shared amongst all clients of
+  /// pigpiod, this might involve auditing your process handling etc.
+  ///
+  /// Caller must also ensure that `txmode` is a valid value.  If it is
+  /// not then possibly it invokes some hazardous new feature of
+  /// pigpiod. 
   pub async unsafe fn wave_send_using_mode(&self, wave: WaveId, txmode : Word)
                                            -> Result<Word> {
-    // Caller must ensure that if txmode is *SYNC* the "bad things"
-    // described in the pigpio docs do not happen.
-    //
-    // If *any* calls to this function use *SYNC*, then wave_delete
-    // is potentially unsafe and all calls to it must be checked.
-    //
-    // Note that because everything is shared amongst all clients of
-    // pigpiod, this might involve auditing your process handling etc.
-    //
-    // Caller must also ensure that txmode is a valid value.
     self.cmdr(PI_CMD_WVTXM, wave.0, txmode).await
   }
 }
 
 /* ----- notifications ----- */
 
+/// Represents a change to a gpio pin, as requested by
+/// `notify_subscribe`.
 #[derive(Debug,PartialEq,Eq,Copy,Clone,Hash)]
 pub struct GpioChange {
   pub pin : Pin,
-  pub level : Option<Level>, // None only before gpio has been read
-  pub tick : Option<Tick>, // None for the initial notification
-  pub sequence : Word, // increments by 1 each time; allows spotting lost events
+  /// Can be `None` only if `notify_subscribe` parameter
+  /// `read_initially` is `false`: then it is `None` before gpio has
+  /// been read for the first time.  In that case, the first recv on
+  /// the `Subscription` will get `None`.  All other recvs will get
+  /// `Some`.
+  pub level : Option<Level>,
+  /// `None` until the first change.  Ie, the first recv on
+  /// `Subscription` will get `None` (regardless of `read_initially`)
+  /// and subsequent ones will get `Some`.
+  pub tick : Option<Tick>,
+  /// Increments by 1 each time the `Subscription` is updated This
+  /// allows the caller to spot missed updates, provided that they
+  /// look often enough that it doesn't wrap.
+  pub sequence : Word,
 }
 
 type GpioReceiver = watch::Receiver<GpioChange>;
 
+/// Subscription to a GPIO pin.  Contains a `GpioReceiver` ie
+/// a `watch::Receiver<GpioChange>`.  To unsubscribe from
+/// notifications, simply drop the `Subscription`.
 pub struct Subscription {
   wreceiver : GpioReceiver,
   _dsender : oneshot::Sender<()>, // exists to signal being dropped
@@ -537,15 +669,26 @@ impl ConnectionCore {
 }
 
 impl Connection {
+  /// Starts watching for changes to a GPIO pin.  Change notifications
+  /// are sent as `GpioChange` to the returned `Subscription`.
+  ///
+  /// If `read_initially`, reads the gpio once at the start, so
+  /// that the subscription's `level` starts out as `Some`.
+  ///
+  /// If `tick_keepalives`, will send a `GpioChange` with unchanged
+  /// `Some(Level)` and a fresh `Some(Tick)` at least every
+  /// `TICK_KEEPALIVE_US`; this allows the receiver to spot when
+  /// the tick wraps around.
+  ///
+  /// Behind the scenes, getting GPIO change notifications involves
+  /// making a 2nd connection to pigpiod.  This will be done the first
+  /// time `notify_subscribe` is called; it will then be retained for
+  /// future reuse.  This is relevant to Rust callers because pigpiod
+  /// has a limit on the number of simultaneousconnections.
   pub async fn notify_subscribe(&self, pin : Pin,
                                 read_initially : bool,
                                 tick_keepalives : bool)
                                 -> Result<Subscription> {
-    // Arranges to send GpioChange to Subscription
-    // If expected_spec is not None, reads the gpio once at the start,
-    // and sends a notification with no Tick if expected_spec is not
-    // Some(Some(the current level)).
-
     let mut notify_locked = self.notify.lock().await;
     if notify_locked.is_idle() {
       let stream = connect_from_addrs(&self.addrs).await?;
