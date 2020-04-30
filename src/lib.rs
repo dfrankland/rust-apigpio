@@ -103,7 +103,7 @@ pub enum GpioMode {
   Alt5   = PI_ALT5 as isize,
 }
 
-#[derive(Debug,Display,PartialEq,Eq,Copy,Clone,Ord,PartialOrd)]
+#[derive(Debug,Display,PartialEq,Eq,Copy,Clone,Ord,PartialOrd,Hash)]
 pub enum Level {
   L = 0,
   H = 1,
