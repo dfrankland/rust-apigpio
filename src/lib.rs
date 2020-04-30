@@ -266,11 +266,11 @@ impl ConnectionCore {
     cmd_raw(&mut conn, cmd,p1,p2,p3, extra).await
   }
 
-  pub async fn cmdr(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<Word> {
+  async fn cmdr(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<Word> {
     self.cmd_raw(cmd,p1,p2,0,&[0;0]).await
   }
 
-  pub async fn cmd0(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<()> {
+  async fn cmd0(&self, cmd : Word, p1 : Word, p2 : Word) -> Result<()> {
     let res = self.cmdr(cmd,p1,p2).await?;
     if res > 0 { return Err(ProtocolBadReturn(res as Word)) }
     Ok(())
