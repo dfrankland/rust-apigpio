@@ -382,7 +382,7 @@ impl ConnectionCore {
 
 /* ----- notifications ----- */
 
-#[derive(Debug,PartialEq,Eq,Copy,Clone)]
+#[derive(Debug,PartialEq,Eq,Copy,Clone,Hash)]
 pub struct GpioChange {
   pub pin : Pin,
   pub level : Option<Level>, // None only before gpio has been read
