@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // There is NO WARRANTY.
 
-//! # Summary - Raspberry PI GPIO access library based on pigpiod.
+//! # Raspberry PI GPIO access library based on pigpiod.
 //!
 //! This library a pure-Rust analogue to the C `pigpio_if2` library,
 //! providing an async interface to talk to pigpiod and based on
 //! Tokio.
+//!
+//! Currently we provide only a subset of pigpio's functionality:
+//! raw GPIO access and notifications, and waveform generation.
+//! Contributions are of course welcome.
 //!
 //! # Consider `rppal` instead!
 //!
@@ -80,6 +84,32 @@
 //!
 //! Another easy way to avoid this problem is to have only a single
 //! process using, say, `rppal`.
+//!
+//! # Safety and correctness
+//!
+//! apigpio is entirely in safe Rust.  So you should not experience
+//! memory corruption within your Rust program.
+//!
+//! However, there can be some surprises because of the way pigpiod
+//! itself works.
+//!
+//! Firstly: *pigpiod resources are global*.  There is no isolation
+//! between different programs all speaking to pigpiod and there is no
+//! automatic cleanup.  For example, in particular:
+//! 
+//! Only one program can conveniently make use of `wave_*` functions
+//! at once, because pigpiod has only one currently-building waveform,
+//! and one currently-transmitting waveform.  Waveforms are not
+//! deleted when your program quits - but it is conventional to use
+//! `wave_clear` at startup so your next run will clean everything up.
+//!
+//! Secondly: *pigpiod itself has some hazardous features*.  These are
+//! generally discussed in the pigpio documentation.  The only such
+//! feature currently available via apigpio is the `*SYNC*` waveform
+//! chaining function combined with the ability to delete waveforms.
+//! These kind of features are available in apigpiod only from
+//! `unsafe` callers (even though they are implemented in Safe Rust).
+
 
 pub mod constants;
 use constants::*;
