@@ -13,6 +13,9 @@
 #![allow(unused_parens)]
 
 //! Constants from C pigpio.h, converted into Rust `const`s.
+//!
+//! Also `PI_error_code_lookup` for helping print error codes
+//! found in `Error::Pi`.
 /* BSC FIFO size */
 /* gpio: 0-53 */
 pub const PI_MIN_GPIO : u32 = 0;
@@ -537,6 +540,22 @@ pub const PI_CUSTOM_ERR_999 : i32 = -3999;
 /*DEF_E*/
 /*DEF_S Defaults*/
 /*DEF_E*/
+/// Provides string descriptions of a 32-bit pigpio error code.
+///
+/// `val` is the value from `Error:Pi`, or similar.  It can be
+/// one of the `PI_*` values representing error codes.
+///
+/// The returned strings are
+///  * The `PI_*` abbreviation name.
+///  * The comment from pigpiod.h.
+///
+/// If the returned value is `None`, the error code was not
+/// recognised.  Probably this means that you are using a newer 
+/// pigpiod than this library.
+///
+/// (The error codes are negative.  So you should pass a negative
+/// number to this function.  Do not negate the error code to
+/// make it positive.)
 #[allow(non_snake_case)]
 pub fn PI_error_code_lookup(val : i32)
                             -> Option<(&'static str, &'static str)> {
