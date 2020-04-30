@@ -152,7 +152,8 @@ pub type MessageBuf = [u8;16];
 pub enum Error {
   /// This is not an enum because if pigpiod is newer than apigpio,
   /// pigpiod might send error codes that apigpio does not understand.
-  /// Specific error values can be checked 
+  /// Specific error values can be checked by comparing with
+  /// values from the `constants` module.
   #[error("pigpiod reported error {0}")]
   Pi(i32),
   #[error("env var {0} contains non-unicode data")]
@@ -184,13 +185,14 @@ use Error::*;
 
 pub type Result<T> = std::result::Result<T,Error>;
 
-/// For documentation purposes, where a word is a pigpio tick
-/// we use this type.
-pub type Tick = Word; // [us]
+/// pigpiod tick (\[us])
+pub type Tick = Word;
 
 /// The main struct which owns a connection to pigpiod.
-/// Most of the methods are provided by `ConnectionCore`
-/// for internal reasons.
+/// Start by creating one of these.
+///
+/// Most of the interesting methods are methods on `ConnectionCore`
+/// which this derefs to.
 #[derive(Clone)]
 pub struct Connection {
   conn : Arc<ConnectionCore>,
@@ -198,11 +200,13 @@ pub struct Connection {
   _notify_shutdown_sender : mpsc::Sender<()>,
 }
 
-/// Most of the Connection methods are actually provided here.
-/// Mostly, methods are named after the functions in `pigpiod_if2`
-/// http://abyz.me.uk/rpi/pigpio/pdif2.html and perform the same
-/// function; often they are only documented here in `agpipio` if
-/// there is anything unusual to note.
+/// Most of the Connection methods, mirroring `pigpiod_if2`,
+/// are actually provided here.
+///
+/// Where methods are named after a facility in `pigpiod_if2`
+/// <http://abyz.me.uk/rpi/pigpio/pdif2.html> they perform the same
+/// function here.  Documentation here in `agpipio` is present only
+/// if there is something unusual.
 pub struct ConnectionCore {
   conn : Mutex<Communicator<TcpStream>>,
   notify : Mutex<NotifyInCore>,
@@ -240,15 +244,25 @@ impl std::ops::Not for Level {
   fn not(self) -> Self { match self { H => L, L => H, } }
 }
 
+/// BCM GPIO pin number.
+///
 /// For documentation purposes, where a word is a GPIP pin number
-/// we use this type.  These are always BCM GPIO pin numbers.
+/// we use this type.
 pub type Pin = Word;
 
-/// Refers to a Wave stored in pigpiod.  See the pigpio wave
-/// documentaton.  In pigpiod Wave IDs are global across all pigpio
-/// clients, and waves not cleared (nor transmission stopped!) when a
-/// client disconnects.  So the inner Word is available in case you
-/// need to do something exciting and cross-process.
+/// Refers to a Wave stored in pigpiod.
+///
+/// See the pigpio wave documentaton.  In pigpiod Wave IDs are global
+/// across all pigpio clients, and waves not cleared (nor transmission
+/// stopped!) when a client disconnects.
+///
+/// Because of safety concerns (see particularly the pigpio documentation
+/// about wave `*SYNC*`), waves are not automatically deleted when
+/// a `WaveID` is dropped.  The best approach is usually to use
+/// `wave_clear` on program startup.
+///
+/// The inner `Word` is available in case you need to do something
+/// exciting (maybe something cross-process).
 #[derive(Debug,PartialEq,Eq,Copy,Clone,Ord,PartialOrd,Hash)]
 pub struct WaveId (pub Word);
 
@@ -292,11 +306,11 @@ level_try_from!{u16}
 level_try_from!{u8}
 
 impl Level {
-  /// Short convenient name for converting into a Level.
+  /// Short convenient name for converting into a `Level`.
   pub fn u(u : usize) -> Level {
     TryFrom::try_from(u).unwrap_or_else(|_| panic!("Level::u({})",u))
   }
-  /// Short convenient name for converting from a Level.
+  /// Short convenient name for converting from a `Level`.
   pub fn b(b : bool) -> Level { Level::u(b as usize) }
 }
 
@@ -359,7 +373,7 @@ impl Connection {
     })
   }
 
-  /// Connects to pigpiod using default address.
+  /// Connects to pigpiod using the default address and port.
   pub async fn new() -> Result<Connection> {
     let addr = default_addr()?;
     let sockaddr = (addr.as_ref(), default_port()?);
@@ -461,7 +475,7 @@ impl ConnectionCore {
   }
   /// This is safe if no-one in the whole system ever calls
   /// `wave_send_using_mode` with mode `*SYNC*`.  See the pigpio
-  /// documentation on `wave_send_using_mode` full details.
+  /// documentation on `wave_send_using_mode` for full details.
   pub async unsafe fn wave_delete(&self, wave : WaveId) -> Result<()> {
     self.cmd0(PI_CMD_WVDEL, wave.0, 0).await
   }
@@ -552,7 +566,9 @@ pub struct GpioChange {
 
 type GpioReceiver = watch::Receiver<GpioChange>;
 
-/// Subscription to a GPIO pin.  Contains a `GpioReceiver` ie
+/// Subscription to a GPIO pin.
+///
+/// Contains a `GpioReceiver` ie
 /// a `watch::Receiver<GpioChange>`.  To unsubscribe from
 /// notifications, simply drop the `Subscription`.
 pub struct Subscription {
@@ -715,7 +731,7 @@ impl Connection {
   /// making a 2nd connection to pigpiod.  This will be done the first
   /// time `notify_subscribe` is called; it will then be retained for
   /// future reuse.  This is relevant to Rust callers because pigpiod
-  /// has a limit on the number of simultaneousconnections.
+  /// has a limit on the number of simultaneous connections.
   pub async fn notify_subscribe(&self, pin : Pin,
                                 read_initially : bool,
                                 tick_keepalives : bool)
