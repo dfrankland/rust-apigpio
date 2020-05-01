@@ -153,7 +153,7 @@ pub type Word = u32;
 pub type MessageBuf = [u8;16];
 
 /// Wraps up a pigpiod error code
-#[derive(Debug,Copy,Clone,Eq,PartialEq,Hash)]
+#[derive(Debug,Copy,Clone,Eq,PartialEq,Hash,Ord,PartialOrd)]
 pub struct PigpiodError (pub i32);
 
 #[derive(Error,Debug)]
