@@ -116,6 +116,9 @@ use constants::*;
 
 pub mod trackbuf;
 
+#[path="constants/errors.rs"]
+pub mod errors;
+
 use std::env;
 
 use thiserror::Error;
