@@ -1,6 +1,6 @@
 [package]
 name = "apigpio"
-description = "pigpio bindings - safe, async, Rust pigpiod client library"
+description = "Raspberry PI GPIO access, via pigpiod; safe, async, Tokio"
 
 #  Copyright (C) 2020 Ian Jackson
 #
@@ -31,8 +31,13 @@ authors = ["Ian Jackson <ijackson@chiark.greenend.org.uk>",
            "pigpio contributors http://abyz.me.uk/rpi/pigpio/"]
 license = "AGPL-3.0-or-later"
 
-version = "0.1.0"
+version = "0.1.1"
 edition = "2018"
+
+readme = "README.md"
+homepage = "https://salsa.debian.org/iwj/rust-apigpio"
+keywords = ["raspberry", "pi", "rpi", "pigpio", "pigpiod"]
+categories = ["embedded", "hardware-support", "api-bindings", "asynchronous"]
 
 [dependencies]
 thiserror = "1"
