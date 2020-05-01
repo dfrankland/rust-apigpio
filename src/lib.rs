@@ -130,6 +130,7 @@ use std::convert::TryFrom;
 use std::ops::{Deref,DerefMut};
 use std::sync::Arc;
 use std::mem::replace;
+use std::fmt::{Display,Formatter};
 
 use arrayref::*;
 use num_traits::FromPrimitive;
@@ -148,6 +149,10 @@ pub type Word = u32;
 /// Used only for reporting an unexpected reply from pigpiod.
 pub type MessageBuf = [u8;16];
 
+/// Wraps up a pigpiod error code
+#[derive(Debug,Copy,Clone,Eq,PartialEq,Hash)]
+pub struct PigpiodError (pub i32);
+
 #[derive(Error,Debug)]
 pub enum Error {
   /// This is not an enum because if pigpiod is newer than apigpio,
@@ -155,7 +160,7 @@ pub enum Error {
   /// Specific error values can be checked by comparing with
   /// values from the `constants` module.
   #[error("pigpiod reported error {0}")]
-  Pi(i32),
+  Pi(PigpiodError),
   #[error("env var {0} contains non-unicode data")]
   EnvNotUnicode(String),
   #[error("env var {0} value could not be parsed")]
@@ -182,6 +187,16 @@ pub enum Error {
   ProtocolReplyMismatch(Box<(MessageBuf,MessageBuf)>),
 }
 use Error::*;
+
+impl Display for PigpiodError {
+  fn fmt(&self, f : &mut Formatter) -> result::Result<(), fmt::Error> {
+    if let Some((abbrev, desc)) = PI_error_code_lookup(self.0) {
+      write!(f, "{} ({})", abbrev, desc)
+    } else {
+      write!(f, "PI_ unknown error code {}", self.0)
+    }
+  }
+}
 
 pub type Result<T> = std::result::Result<T,Error>;
 
@@ -408,7 +423,7 @@ async fn cmd_raw(conn : &mut Communicator<TcpStream>,
     return Err(ProtocolReplyMismatch(Box::new((cmsg,rmsg))))
   }
   let res = i32::from_le_bytes(*array_ref![rmsg,12,4]);
-  if res < 0 { return Err(Error::Pi(res)); }
+  if res < 0 { return Err(Error::Pi(PigpiodError(res))); }
   Ok(res as Word)
 }
 
