@@ -202,14 +202,6 @@ impl Display for PigpiodError {
 }
 
 impl PigpiodError {
-  /// Returns `Some("PI_...")`, or `None` if the error code was unknown.
-  pub fn abbrev(&self) -> Option<&'static str> {
-    PI_error_code_lookup(self.0).map(|pair| pair.0)
-  }
-  /// Returns `Some("brief summary")`, or `None` if the error code was unknown.
-  pub fn summary(&self) -> Option<&'static str> {
-    PI_error_code_lookup(self.0).map(|pair| pair.1)
-  }
   /// Returns `Some("PI_...","brief summary")`, or `None`
   pub fn strs(&self) -> Option<&'static str> {
     PI_error_code_lookup(self.0).map(|pair| pair.1)
