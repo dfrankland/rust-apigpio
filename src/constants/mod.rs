@@ -15,7 +15,12 @@
 //! Constants from C pigpio.h, converted into Rust `const`s.
 //!
 //! Also `PI_error_code_lookup` for helping print error codes
-//! found in `Error::Pi`.
+//! found in `PigpiodError`.
+//!
+//! But, for error handling: `PigpiodError`, and the `errors`
+//! module, provide a better interface.
+//!
+//! Everything in this module is named `PI_...`.
 /* BSC FIFO size */
 /* gpio: 0-53 */
 pub const PI_MIN_GPIO : u32 = 0;

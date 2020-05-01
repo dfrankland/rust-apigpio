@@ -57,7 +57,7 @@
 //! It is possible to use both libraries in a single project,
 //! but see the following note:
 //!
-//! # Concurrent setting of RPI GPIO PIN modes
+//! # Concurrent setting of RPI GPIO pin modes
 //!
 //! The Broadcom SOC provides a way to raise, or lower, individual
 //! GPIO pin outputs (or sets of outputs) in a way that does not
@@ -65,7 +65,7 @@
 //!
 //! However, this interface is only provided for setting the *level*
 //! of an output pin.  For modes, pullup/pulldown, etc., there are
-//! only registers containing information about multiple pins where
+//! only mmio registers containing information about multiple pins where
 //! changes are made by reading the register, adjusting the bits which
 //! control a particular pin, and writing the information back.
 //!
@@ -107,8 +107,8 @@
 //! generally discussed in the pigpio documentation.  The only such
 //! feature currently available via apigpio is the `*SYNC*` waveform
 //! chaining function combined with the ability to delete waveforms.
-//! These kind of features are available in apigpiod only from
-//! `unsafe` callers (even though they are implemented in Safe Rust).
+//! These kind of features are made available by apigpiod only to
+//! `unsafe` callers (even though they are implemented in safe Rust).
 
 
 pub mod constants;
@@ -153,15 +153,16 @@ pub type Word = u32;
 pub type MessageBuf = [u8;16];
 
 /// Wraps up a pigpiod error code
+///
+/// This is not an enum because if pigpiod is newer than apigpio,
+/// pigpiod might send error codes that apigpio does not understand.
+/// Specific error values can be checked for by comparing with
+/// values from the `errors` module.
 #[derive(Debug,Copy,Clone,Eq,PartialEq,Hash,Ord,PartialOrd)]
 pub struct PigpiodError (pub i32);
 
 #[derive(Error,Debug)]
 pub enum Error {
-  /// This is not an enum because if pigpiod is newer than apigpio,
-  /// pigpiod might send error codes that apigpio does not understand.
-  /// Specific error values can be checked by comparing with
-  /// values from the `errors` module.
   #[error("pigpiod reported error {0}")]
   Pi(PigpiodError),
   #[error("env var {0} contains non-unicode data")]
@@ -202,7 +203,8 @@ impl Display for PigpiodError {
 }
 
 impl PigpiodError {
-  /// Returns `Some("PI_...","brief summary")`, or `None`
+  /// Returns `Some("PI_...","brief summary")`,
+  /// or `None` if the error code was not recognised.
   pub fn strs(&self) -> Option<&'static str> {
     PI_error_code_lookup(self.0).map(|pair| pair.1)
   }
@@ -271,7 +273,7 @@ impl std::ops::Not for Level {
 
 /// BCM GPIO pin number.
 ///
-/// For documentation purposes, where a word is a GPIP pin number
+/// For documentation purposes, where a `Word` is a GPIO pin number
 /// we use this type.
 pub type Pin = Word;
 
@@ -300,7 +302,7 @@ impl fmt::Display for WaveId {
   }
 }
 
-/// Represents a waveform element.  See pigpio docs.
+/// Represents a waveform element.  Pure data.  See the pigpio docs.
 #[derive(Clone,Copy,Debug)]
 pub struct Pulse {
   pub on_mask:  Word,
@@ -579,12 +581,12 @@ pub struct GpioChange {
   /// the `Subscription` will get `None`.  All other recvs will get
   /// `Some`.
   pub level : Option<Level>,
-  /// `None` until the first change.  Ie, the first recv on
+  /// `None` until the first change.  I.e., the first recv on
   /// `Subscription` will get `None` (regardless of `read_initially`)
   /// and subsequent ones will get `Some`.
   pub tick : Option<Tick>,
-  /// Increments by 1 each time the `Subscription` is updated This
-  /// allows the caller to spot missed updates, provided that they
+  /// Increments by 1 each time the `Subscription` is updated.  This
+  /// allows you to spot missed updates, provided that you
   /// look often enough that it doesn't wrap.
   pub sequence : Word,
 }
@@ -593,8 +595,7 @@ type GpioReceiver = watch::Receiver<GpioChange>;
 
 /// Subscription to a GPIO pin.
 ///
-/// Contains a `GpioReceiver` ie
-/// a `watch::Receiver<GpioChange>`.  To unsubscribe from
+/// Contains a `watch::Receiver<GpioChange>`.  To unsubscribe from
 /// notifications, simply drop the `Subscription`.
 pub struct Subscription {
   wreceiver : GpioReceiver,
@@ -742,7 +743,8 @@ impl ConnectionCore {
 
 impl Connection {
   /// Starts watching for changes to a GPIO pin.  Change notifications
-  /// are sent as `GpioChange` to the returned `Subscription`.
+  /// are sent as `GpioChange` to the returned `Subscription`, which
+  /// is a wrapper for a `watch::Receiver<GpioChange>`.
   ///
   /// If `read_initially`, reads the gpio once at the start, so
   /// that the subscription's `level` starts out as `Some`.

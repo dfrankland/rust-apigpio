@@ -25,7 +25,12 @@ print <<END;
 //! Constants from C pigpio.h, converted into Rust `const`s.
 //!
 //! Also `PI_error_code_lookup` for helping print error codes
-//! found in `Error::Pi`.
+//! found in `PigpiodError`.
+//!
+//! But, for error handling: `PigpiodError`, and the `errors`
+//! module, provide a better interface.
+//!
+//! Everything in this module is named `PI_...`.
 END
 
 our $def_s = '';
