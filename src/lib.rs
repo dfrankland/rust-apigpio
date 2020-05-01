@@ -5,12 +5,16 @@
 //! # Raspberry PI GPIO access library based on pigpiod.
 //!
 //! This library a pure-Rust analogue to the C `pigpio_if2` library,
-//! providing an async interface to talk to pigpiod and based on
-//! Tokio.
+//! providing an async interface to talk to pigpiod.  apigpio uses
+//! the Rust async framework Tokio.
 //!
 //! Currently we provide only a subset of pigpio's functionality:
 //! raw GPIO access and notifications, and waveform generation.
 //! Contributions are of course welcome.
+//!
+//! You will want to read
+//! [the pigpio_if2 documentation](http://abyz.me.uk/rpi/pigpio/pdif2.html)
+//! from the pigpio project.
 //!
 //! # Consider `rppal` instead!
 //!
@@ -51,11 +55,12 @@
 //!
 //!  * No need to deal with async Rust.
 //!
-//!  * No need to arrange for a daemon to be running, make sure
-//!    your embedded OS's startup order is correct, etc.
+//!  * No need to arrange for a daemon to be running, override
+//!    pigpiod's default so it's not open to the global Internet (!),
+//!    make sure your system startup order is correct, etc.
 //!
-//! It is possible to use both libraries in a single project,
-//! but see the following note:
+//! It is entirely possible to use both libraries in a single project.
+//! I have done so myself.  But see the following note:
 //!
 //! # Concurrent setting of RPI GPIO pin modes
 //!
@@ -69,21 +74,26 @@
 //! changes are made by reading the register, adjusting the bits which
 //! control a particular pin, and writing the information back.
 //!
-//! If multiple tasks on the rpi do this at once, they can
-//! accidentally undo each others' changes.
+//! If multiple actors on the rpi do this at once, even for
+//! different pins, they can accidentally undo each others' changes.
 //!
-//! For this purpose, pigpiod is a single task: it will serialise the
+//! For this purpose, pigpiod is a single actor: it will serialise the
 //! updates itself.  So if all your programs use pigpiod (via apigpio,
-//! or via another programming language which talks to pigpiod) you
-//! are fine.
+//! or via libraries in other programming languages which talk to
+//! pigpiod) you are fine.
+//!
+//! Even combining `rppal` and `apigpio` within one Rust program
+//! involves multiple actors, because apigpiod's work is all done by
+//! pigpiod.
 //!
 //! If you want to mix and match, the easiest way to ensure
 //! correctness is to have a single task at startup set all the gpio
-//! modes as you want them.  Then all subsequent updates will be
-//! harmless no-ops.
+//! modes.  Then all subsequent updates will be harmless no-ops.
+//! (This is not suitable, of course, if you need to change modes
+//! at runtime.)
 //!
-//! Another easy way to avoid this problem is to have only a single
-//! process using, say, `rppal`.
+//! But the easiest way to avoid this problem is to have only a single
+//! program using a single (thread-safe, if applicable) library.
 //!
 //! # Safety and correctness
 //!
