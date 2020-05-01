@@ -93,7 +93,8 @@
 //! at runtime.)
 //!
 //! But the easiest way to avoid this problem is to have only a single
-//! program using a single (thread-safe, if applicable) library.
+//! program using a single (thread-safe, if applicable) library -
+//! for example, `rppal`.
 //!
 //! # Safety and correctness
 //!
